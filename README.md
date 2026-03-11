@@ -4,7 +4,7 @@ A custom Lovelace card for [Home Assistant](https://www.home-assistant.io/) that
 
 > **Requires the [DB Info Integration](https://github.com/EiS94/db_info)**
 
-![DB Info Card Preview](images/db-info-card.gif)
+<img src="images/db-info-card.gif" alt="DB Info Card Preview" width="450">
 
 ---
 

@@ -1,3 +1,10 @@
+[![GitHub Release](https://img.shields.io/github/v/release/EiS94/db-info-card)](https://github.com/EiS94/db-info-card/releases/latest)
+[![License](https://img.shields.io/github/license/EiS94/db-info-card)](LICENSE)
+[![Stars](https://img.shields.io/github/stars/EiS94/db-info-card)](https://github.com/EiS94/db-info-card/stargazers)
+[![Validate](https://img.shields.io/github/actions/workflow/status/EiS94/db-info-card/validate.yml?label=Validate)](https://github.com/EiS94/db-info-card/actions/workflows/validate.yml)
+[![hacs_badge](https://img.shields.io/badge/HACS-Custom-orange.svg)](https://github.com/hacs/integration)
+[![Downloads](https://img.shields.io/github/downloads/EiS94/db-info-card/total)](https://github.com/EiS94/db-info-card/releases)
+
 # 🚉 DB Info Card
 
 A custom Lovelace card for [Home Assistant](https://www.home-assistant.io/) that displays Deutsche Bahn connections with real-time data in a clean, interactive table — with expandable rows showing detailed segment information.
@@ -28,7 +35,7 @@ A custom Lovelace card for [Home Assistant](https://www.home-assistant.io/) that
 
 ### Via HACS
 
-Unfortunately not yet available in HACS
+[![Open your Home Assistant instance and open a repository inside the Home Assistant Community Store.](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=EiS94&repository=db-info-card&category=plugin)
 
 ### Manual Installation
 

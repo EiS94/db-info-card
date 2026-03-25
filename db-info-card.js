@@ -12,10 +12,11 @@ class DbInfoCard extends HTMLElement {
     if (!config.entity_prefix) {
       throw new Error("Bitte 'entity_prefix' angeben, z.B. sensor.home_hbf_verbindung_");
     }
-    // Optionale Spalten: show_start (default: true), delay_threshold (default: 5)
+
     this._config = {
       show_start: true,
       delay_threshold: 5,
+      hide_city: "",
       ...config
     };
   }
@@ -126,6 +127,18 @@ class DbInfoCard extends HTMLElement {
       </tr>`;
   }
 
+  _formatStart(departure) {
+    if (!departure) return "–";
+    const city = (this._config.hide_city || "").trim();
+    if (!city) return departure;
+    // Only remove ", City" at the end of the string (word boundary after city name)
+    const escaped = city.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    let result = departure
+      .replace(new RegExp(",\\s*" + escaped + "\\b\\s*$", "i"), "")
+      .trim();
+    return result || departure;
+  }
+
   _render() {
     if (!this._hass || !this._config) return;
 
@@ -182,7 +195,7 @@ class DbInfoCard extends HTMLElement {
 
       return `
         <tr class="main-row" data-idx="${idx}" style="${bgStyle}cursor:pointer;">
-          ${showStart ? `<td class="left">${attr.Departure || "–"}</td>` : ""}
+          ${showStart ? `<td class="left">${this._formatStart(attr.Departure)}</td>` : ""}
           <td class="left">${attr.Name || "–"}</td>
           <td class="center">${this._renderTimeCell(attr["Departure Time"], attr["Departure Time Real"], threshold)}</td>
           <td class="center">${this._renderTimeCell(attr["Arrival Time"], attr["Arrival Time Real"], threshold)}</td>
@@ -377,12 +390,11 @@ class DbInfoCard extends HTMLElement {
   }
 
   static getStubConfig() {
-    return { entity_prefix: "", title: "", show_start: true, delay_threshold: 5 };
+    return { entity_prefix: "", title: "", show_start: true, delay_threshold: 5, hide_city: "" };
   }
 }
 
 customElements.define("db-info-card", DbInfoCard);
-
 
 
 class DbInfoCardEditor extends HTMLElement {
@@ -394,7 +406,7 @@ class DbInfoCardEditor extends HTMLElement {
   }
 
   setConfig(config) {
-    this._config = { show_start: true, delay_threshold: 5, ...config };
+    this._config = { show_start: true, delay_threshold: 5, hide_city: "", ...config };
     if (this._initialized) {
       this._updateValues();
     }
@@ -431,6 +443,7 @@ class DbInfoCardEditor extends HTMLElement {
     const showStart = this._config.show_start !== false;
     const threshold = this._config.delay_threshold ?? 5;
     const title = this._config.title || "";
+    const hideCity = this._config.hide_city || "";
 
     const options = groups.map(([prefix, label]) =>
       `<option value="${prefix}" ${prefix === currentPrefix ? "selected" : ""}>${label}</option>`
@@ -475,6 +488,12 @@ class DbInfoCardEditor extends HTMLElement {
           <input type="number" id="threshold" value="${threshold}" min="1" max="60">
         </label>
 
+        <label>
+          Stadtname aus Start ausblenden (optional)
+          <input type="text" id="hide_city" value="${hideCity}" placeholder="z.B. Würzburg">
+          <span class="hint">Entfernt diesen Ortsnamen aus der Start-Spalte</span>
+        </label>
+
         <div class="row">
           <label>
             <input type="checkbox" id="show_start" ${showStart ? "checked" : ""}>
@@ -503,6 +522,11 @@ class DbInfoCardEditor extends HTMLElement {
       this._config = { ...this._config, show_start: e.target.checked };
       this._fireChange();
     });
+
+    this.shadowRoot.getElementById("hide_city").addEventListener("change", (e) => {
+      this._config = { ...this._config, hide_city: e.target.value };
+      this._fireChange();
+    });
   }
 
   _updateValues() {
@@ -510,11 +534,13 @@ class DbInfoCardEditor extends HTMLElement {
     const title = this.shadowRoot.getElementById("title");
     const threshold = this.shadowRoot.getElementById("threshold");
     const showStart = this.shadowRoot.getElementById("show_start");
+    const hideCity = this.shadowRoot.getElementById("hide_city");
     if (!prefix) return;
     if (document.activeElement !== prefix) prefix.value = this._config.entity_prefix || "";
     if (document.activeElement !== title) title.value = this._config.title || "";
     if (document.activeElement !== threshold) threshold.value = this._config.delay_threshold ?? 5;
     showStart.checked = this._config.show_start !== false;
+    if (hideCity && document.activeElement !== hideCity) hideCity.value = this._config.hide_city || "";
   }
 
   _updateOptions() {
@@ -546,6 +572,7 @@ class DbInfoCardEditor extends HTMLElement {
 }
 
 customElements.define("db-info-card-editor", DbInfoCardEditor);
+
 window.customCards = window.customCards || [];
 window.customCards.push({
   type: "db-info-card",

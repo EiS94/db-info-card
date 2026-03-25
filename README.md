@@ -7,7 +7,8 @@
 
 # 🚉 DB Info Card
 
-A custom Lovelace card for [Home Assistant](https://www.home-assistant.io/) that displays Deutsche Bahn connections with real-time data in a clean, interactive table — with expandable rows showing detailed segment information.
+A custom Lovelace card for [Home Assistant](https://www.home-assistant.io/) that displays Deutsche Bahn connections with
+real-time data in a clean, interactive table — with expandable rows showing detailed segment information.
 
 > **Requires the [DB Info Integration](https://github.com/EiS94/db_info)**
 
@@ -43,8 +44,8 @@ A custom Lovelace card for [Home Assistant](https://www.home-assistant.io/) that
 2. Copy it to `config/www/db-info-card.js`
 3. In Home Assistant go to **Settings → Dashboards → Resources**
 4. Add a new resource:
-   - **URL:** `/local/db-info-card.js`
-   - **Type:** JavaScript module
+    - **URL:** `/local/db-info-card.js`
+    - **Type:** JavaScript module
 5. Reload your browser
 
 ---
@@ -53,9 +54,11 @@ A custom Lovelace card for [Home Assistant](https://www.home-assistant.io/) that
 
 ### Visual Editor
 
-The card ships with a built-in visual editor. When adding the card in the Lovelace UI, click **"DB Info Card"** and use the editor to configure it — no YAML needed.
+The card ships with a built-in visual editor. When adding the card in the Lovelace UI, click **"DB Info Card"** and use
+the editor to configure it — no YAML needed.
 
-The connection dropdown automatically detects all DB Info sensors and groups them by route (e.g. `sensor.home_hbf_verbindung_1` through `_5` appear as a single entry `"Home → Hbf"`).
+The connection dropdown automatically detects all DB Info sensors and groups them by route (e.g.
+`sensor.home_hbf_verbindung_1` through `_5` appear as a single entry `"Home → Hbf"`).
 
 ### YAML Configuration
 
@@ -65,16 +68,18 @@ entity_prefix: sensor.home_hbf_verbindung_
 title: Zuhause → Würzburg Hbf      # optional
 show_start: true                   # optional, default: true
 delay_threshold: 5                 # optional, default: 5
+hide_city: Würzburg                # optional
 ```
 
 ### Options
 
-| Option | Type | Default | Description |
-|---|---|---|---|
-| `entity_prefix` | `string` | **required** | Prefix of the DB Info sensors, e.g. `sensor.home_hbf_verbindung_` |
-| `title` | `string` | _(none)_ | Card title shown in the header |
-| `show_start` | `boolean` | `true` | Show or hide the "Start" column |
-| `delay_threshold` | `number` | `5` | Minutes of delay from which the time is shown in red |
+| Option            | Type      | Default      | Description                                                                                                |
+|-------------------|-----------|--------------|------------------------------------------------------------------------------------------------------------|
+| `entity_prefix`   | `string`  | **required** | Prefix of the DB Info sensors, e.g. `sensor.home_hbf_verbindung_`                                          |
+| `title`           | `string`  | _(none)_     | Card title shown in the header                                                                             |
+| `show_start`      | `boolean` | `true`       | Show or hide the "Start" column                                                                            |
+| `delay_threshold` | `number`  | `5`          | Minutes of delay from which the time is shown in red                                                       |
+| `hide_city`       | `string`  | _(none)_     | Hides the name of the City in the start column, e.g. `Letzter Hieb, Würzburg` transforms to `Letzter Hieb` |
 
 ---
 

@@ -12,10 +12,11 @@ class DbInfoCard extends HTMLElement {
     if (!config.entity_prefix) {
       throw new Error("Bitte 'entity_prefix' angeben, z.B. sensor.home_hbf_verbindung_");
     }
-
+    // Optionale Spalten: show_start (default: true), delay_threshold (default: 5), hide_city (default: "")
     this._config = {
       show_start: true,
       delay_threshold: 5,
+      max_connections: 5,
       hide_city: "",
       ...config
     };
@@ -77,7 +78,8 @@ class DbInfoCard extends HTMLElement {
       const tb = b.attributes["Departure Time Real"] || b.attributes["Departure Time"] || "";
       return new Date(ta) - new Date(tb);
     });
-    return sensors;
+    const max = Math.min(parseInt(this._config.max_connections) || 5, sensors.length);
+    return sensors.slice(0, max);
   }
 
   _renderSegment(seg) {
@@ -131,7 +133,6 @@ class DbInfoCard extends HTMLElement {
     if (!departure) return "–";
     const city = (this._config.hide_city || "").trim();
     if (!city) return departure;
-    // Only remove ", City" at the end of the string (word boundary after city name)
     const escaped = city.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
     let result = departure
       .replace(new RegExp(",\\s*" + escaped + "\\b\\s*$", "i"), "")
@@ -390,7 +391,7 @@ class DbInfoCard extends HTMLElement {
   }
 
   static getStubConfig() {
-    return { entity_prefix: "", title: "", show_start: true, delay_threshold: 5, hide_city: "" };
+    return { entity_prefix: "", title: "", show_start: true, delay_threshold: 5, max_connections: 5, hide_city: "" };
   }
 }
 
@@ -406,7 +407,7 @@ class DbInfoCardEditor extends HTMLElement {
   }
 
   setConfig(config) {
-    this._config = { show_start: true, delay_threshold: 5, hide_city: "", ...config };
+    this._config = { show_start: true, delay_threshold: 5, max_connections: 5, hide_city: "", ...config };
     if (this._initialized) {
       this._updateValues();
     }
@@ -443,6 +444,7 @@ class DbInfoCardEditor extends HTMLElement {
     const showStart = this._config.show_start !== false;
     const threshold = this._config.delay_threshold ?? 5;
     const title = this._config.title || "";
+    const maxConn = this._config.max_connections ?? 5;
     const hideCity = this._config.hide_city || "";
 
     const options = groups.map(([prefix, label]) =>
@@ -489,6 +491,11 @@ class DbInfoCardEditor extends HTMLElement {
         </label>
 
         <label>
+          Anzahl angezeigter Verbindungen (1–5)
+          <input type="number" id="max_connections" value="${maxConn}" min="1" max="5">
+        </label>
+
+        <label>
           Stadtname aus Start ausblenden (optional)
           <input type="text" id="hide_city" value="${hideCity}" placeholder="z.B. Würzburg">
           <span class="hint">Entfernt diesen Ortsnamen aus der Start-Spalte</span>
@@ -518,6 +525,12 @@ class DbInfoCardEditor extends HTMLElement {
       this._fireChange();
     });
 
+    this.shadowRoot.getElementById("max_connections").addEventListener("change", (e) => {
+      const val = Math.min(5, Math.max(1, parseInt(e.target.value) || 5));
+      this._config = { ...this._config, max_connections: val };
+      this._fireChange();
+    });
+
     this.shadowRoot.getElementById("show_start").addEventListener("change", (e) => {
       this._config = { ...this._config, show_start: e.target.checked };
       this._fireChange();
@@ -533,14 +546,16 @@ class DbInfoCardEditor extends HTMLElement {
     const prefix = this.shadowRoot.getElementById("prefix");
     const title = this.shadowRoot.getElementById("title");
     const threshold = this.shadowRoot.getElementById("threshold");
-    const showStart = this.shadowRoot.getElementById("show_start");
+    const maxConn = this.shadowRoot.getElementById("max_connections");
     const hideCity = this.shadowRoot.getElementById("hide_city");
+    const showStart = this.shadowRoot.getElementById("show_start");
     if (!prefix) return;
     if (document.activeElement !== prefix) prefix.value = this._config.entity_prefix || "";
     if (document.activeElement !== title) title.value = this._config.title || "";
     if (document.activeElement !== threshold) threshold.value = this._config.delay_threshold ?? 5;
-    showStart.checked = this._config.show_start !== false;
+    if (document.activeElement !== maxConn) maxConn.value = this._config.max_connections ?? 5;
     if (hideCity && document.activeElement !== hideCity) hideCity.value = this._config.hide_city || "";
+    showStart.checked = this._config.show_start !== false;
   }
 
   _updateOptions() {

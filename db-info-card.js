@@ -135,6 +135,7 @@ class DbInfoCard extends HTMLElement {
     if (!city) return departure;
     const escaped = city.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
     let result = departure
+      .replace(new RegExp("^" + escaped + "\\s+", "i"), "")
       .replace(new RegExp(",\\s*" + escaped + "\\b\\s*$", "i"), "")
       .trim();
     return result || departure;

@@ -2,7 +2,7 @@
 [![License](https://img.shields.io/github/license/EiS94/db-info-card)](LICENSE)
 [![Stars](https://img.shields.io/github/stars/EiS94/db-info-card)](https://github.com/EiS94/db-info-card/stargazers)
 [![Validate](https://img.shields.io/github/actions/workflow/status/EiS94/db-info-card/validate.yml?label=Validate)](https://github.com/EiS94/db-info-card/actions/workflows/validate.yml)
-[![hacs_badge](https://img.shields.io/badge/HACS-Custom-orange.svg)](https://github.com/hacs/integration)
+[![hacs_badge](https://img.shields.io/badge/HACS-Default-41BDF5.svg)](https://github.com/hacs/integration)
 [![Downloads](https://img.shields.io/github/downloads/EiS94/db-info-card/total)](https://github.com/EiS94/db-info-card/releases)
 
 # 🚉 DB Info Card

@@ -1,11 +1,79 @@
 // DB Info Card - Custom Lovelace Card for Home Assistant
 // Only works with DB Info Integration: https://github.com/EiS94/db_info
 
+// Everything inserted into innerHTML goes through this
+function esc(value) {
+  return String(value ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
+// The integration sends "Problems" as str(TrainProblem.X)
+const PROBLEM_TEXTS = {
+  DELAY: "Verspätung",
+  CANCELED: "Fällt aus",
+  STOP_NOT_APPLICABLE: "Halt entfällt",
+  CHANGE_NOT_ACCESSIBLE: "Anschluss gefährdet",
+};
+
+// The integration sends "Details" as str(list) (Python repr, mostly single
+// quotes, double quotes for strings containing an apostrophe). Convert that
+// to JSON by re-encoding every string literal instead of blindly swapping quotes.
+function pythonLiteralToJson(text) {
+  let out = "";
+  let i = 0;
+  while (i < text.length) {
+    const ch = text[i];
+    if (ch === "'" || ch === '"') {
+      let str = "";
+      i++;
+      while (i < text.length && text[i] !== ch) {
+        if (text[i] === "\\" && i + 1 < text.length) {
+          const n = text[i + 1];
+          if (n === "x" || n === "u" || n === "U") {
+            const len = n === "x" ? 2 : n === "u" ? 4 : 8;
+            str += String.fromCodePoint(parseInt(text.substr(i + 2, len), 16));
+            i += 2 + len;
+            continue;
+          }
+          str += { n: "\n", t: "\t", r: "\r" }[n] ?? n;
+          i += 2;
+          continue;
+        }
+        str += text[i++];
+      }
+      if (i >= text.length) throw new Error("Unterminated string");
+      out += JSON.stringify(str);
+      i++;
+      continue;
+    }
+    const word = /^(None|True|False)\b/.exec(text.slice(i, i + 6));
+    if (word && !/\w/.test(text[i - 1] || "")) {
+      out += { None: "null", True: "true", False: "false" }[word[1]];
+      i += word[1].length;
+      continue;
+    }
+    out += ch;
+    i++;
+  }
+  return out;
+}
+
 class DbInfoCard extends HTMLElement {
   constructor() {
     super();
     this.attachShadow({ mode: "open" });
-    this._expandedRow = null;
+    // Key (name + planned departure) of the expanded connection, so the
+    // details stay with the connection when the list shifts
+    this._expandedKey = null;
+    this._lastStates = null;
+    this.shadowRoot.addEventListener("click", (e) => {
+      const row = e.target.closest(".main-row");
+      if (row) this._toggle(row.getAttribute("data-key"));
+    });
   }
 
   setConfig(config) {
@@ -20,11 +88,74 @@ class DbInfoCard extends HTMLElement {
       hide_city: "",
       ...config
     };
+    this._lastStates = null;
+    this._render();
   }
 
+  // hass is set on every state change in Home Assistant -> only re-render
+  // when one of our own sensors changed (state objects are replaced on change)
   set hass(hass) {
     this._hass = hass;
+    if (!this._config) return;
+    const prefix = this._config.entity_prefix;
+    const states = Object.keys(hass.states)
+      .filter(id => id.startsWith(prefix))
+      .map(id => hass.states[id]);
+    const last = this._lastStates;
+    if (last && last.length === states.length && states.every((s, i) => s === last[i])) return;
+    this._lastStates = states;
     this._render();
+  }
+
+  _toggle(key) {
+    this._expandedKey = this._expandedKey === key ? null : key;
+    // Only toggle classes, so the CSS transition can run
+    this.shadowRoot.querySelectorAll(".main-row").forEach(row => {
+      const open = row.getAttribute("data-key") === this._expandedKey;
+      row.querySelector(".expand-cell").textContent = open ? "▴" : "▾";
+      row.nextElementSibling.querySelector(".detail-wrap").classList.toggle("wrap-open", open);
+    });
+  }
+
+  _connectionKey(attr) {
+    return `${attr.Name}|${attr["Departure Time"]}`;
+  }
+
+  _parseDetails(details) {
+    if (typeof details === "string") {
+      try {
+        details = JSON.parse(details);
+      } catch (e) {
+        try {
+          details = JSON.parse(pythonLiteralToJson(details));
+        } catch (e2) {
+          console.warn("db-info-card: Details konnten nicht gelesen werden", e2);
+          details = [];
+        }
+      }
+    }
+    return Array.isArray(details) ? details : [];
+  }
+
+  _problem(raw) {
+    if (!raw || raw === "null" || raw === "None") return null;
+    const code = String(raw).replace(/^TrainProblem\./, "");
+    return { code, text: PROBLEM_TEXTS[code] || String(raw) };
+  }
+
+  _icon(name) {
+    if (!name) return "🚌";
+    // search the whole name: the integration also sends e.g. "Regionalzug RE9"
+    if (/\b(ICE|ECE|IC|EC|EN|NJ|RJX?|TGV|FLX)\s*\d|\b(ICE|TGV)\b|Fernzug|Intercity/.test(name)) return "🚄";
+    if (/\bU\s*\d|U-Bahn/.test(name)) return "🚇";
+    if (/\b(STR|Tram)\b|Straßenbahn|Stadtbahn/i.test(name)) return "🚊";
+    if (/\b(RE|RB|IRE|MEX|S)\s*\d|\b(RE|RB|IRE|MEX)\b|S-Bahn|Regionalzug|Regionalexpress|Regionalbahn/.test(name)) return "🚆";
+    if (/Fähre|\bF\s*\d/.test(name)) return "⛴️";
+    return "🚌";
+  }
+
+  _delayClass(delay) {
+    return delay >= this._config.delay_threshold ? "delay-late" : "delay-slight";
   }
 
   // The integration sends "2026-08-19T19:59:00+0200" (offset without colon),
@@ -75,8 +206,10 @@ class DbInfoCard extends HTMLElement {
   _getSensors() {
     const prefix = this._config.entity_prefix;
     const sensors = [];
+    this._prefixFound = false;
     for (const entityId of Object.keys(this._hass.states)) {
       if (!entityId.startsWith(prefix)) continue;
+      this._prefixFound = true;
       const sensor = this._hass.states[entityId];
       // Sensors without a connection (state "unknown", no attributes) are skipped
       if (!this._departureTimestamp(sensor)) continue;
@@ -108,38 +241,30 @@ class DbInfoCard extends HTMLElement {
 
     const depDelay = this._delayMinutes(seg["Departure Time"], seg["Departure Time Real"]);
 
-    const isICE = seg.Name && /^(ICE|IC |EC )/.test(seg.Name);
-    const isRail = seg.Name && /^(RE|RB|S\d|IRE)/.test(seg.Name);
-    let icon = "🚌";
-    if (isICE) icon = "🚄";
-    else if (isRail) icon = "🚆";
-
-    const depBadge = depDelay > 4
-      ? `<span class="delay-badge delay-late">+${depDelay} Min</span>`
-      : depDelay > 0
-      ? `<span class="delay-badge delay-slight">+${depDelay} Min</span>`
+    const depBadge = depDelay > 0
+      ? `<span class="delay-badge ${this._delayClass(depDelay)}">+${depDelay} Min</span>`
       : "";
 
     const platformDep = seg["Departure Platform"]
-      ? `<span class="platform">Gl.&nbsp;${seg["Departure Platform"]}</span>` : "";
+      ? `<span class="platform">Gl.&nbsp;${esc(seg["Departure Platform"])}</span>` : "";
     const platformArr = seg["Arrival Platform"]
-      ? `<span class="platform">Gl.&nbsp;${seg["Arrival Platform"]}</span>` : "";
+      ? `<span class="platform">Gl.&nbsp;${esc(seg["Arrival Platform"])}</span>` : "";
 
     return `
       <tr class="segment-header-row">
         <td colspan="4" class="segment-name-cell">
-          ${icon} <strong>${seg.Name || "–"}</strong>${depBadge ? "&nbsp;" + depBadge : ""}
+          ${this._icon(seg.Name)} <strong>${esc(seg.Name || "–")}</strong>${depBadge ? "&nbsp;" + depBadge : ""}
         </td>
       </tr>
       <tr class="segment-stop-row">
         <td class="stop-label">Ab</td>
-        <td class="stop-name">${seg.Departure || "–"}</td>
+        <td class="stop-name">${esc(seg.Departure || "–")}</td>
         <td class="stop-time">${this._renderTimeCell(seg["Departure Time"], seg["Departure Time Real"], this._config.delay_threshold)}</td>
         <td class="stop-platform">${platformDep}</td>
       </tr>
       <tr class="segment-stop-row">
         <td class="stop-label">An</td>
-        <td class="stop-name">${seg.Arrival || "–"}</td>
+        <td class="stop-name">${esc(seg.Arrival || "–")}</td>
         <td class="stop-time">${this._renderTimeCell(seg["Arrival Time"], seg["Arrival Time Real"], this._config.delay_threshold)}</td>
         <td class="stop-platform">${platformArr}</td>
       </tr>`;
@@ -182,31 +307,13 @@ class DbInfoCard extends HTMLElement {
 
     const rowsHtml = sensors.map((sensor, idx) => {
       const attr = sensor.attributes;
-      const isExpanded = this._expandedRow === idx;
+      const key = this._connectionKey(attr);
+      const isExpanded = this._expandedKey === key;
       const isOdd = idx % 2 !== 0;
 
-      let details = attr.Details || [];
-      if (typeof details === "string") {
-        try {
-          details = JSON.parse(details);
-        } catch(e) {
-          try {
-            const fixed = details
-              .replace(/'/g, '"')
-              .replace(/\bNone\b/g, "null")
-              .replace(/\bTrue\b/g, "true")
-              .replace(/\bFalse\b/g, "false");
-            details = JSON.parse(fixed);
-          } catch(e2) { details = []; }
-        }
-      }
-      if (!Array.isArray(details)) details = [];
-
-      const problems = attr.Problems &&
-        attr.Problems !== "null" &&
-        attr.Problems !== null &&
-        attr.Problems !== "None"
-          ? attr.Problems : null;
+      const details = this._parseDetails(attr.Details || []);
+      const problem = this._problem(attr.Problems);
+      const canceled = problem && problem.code === "CANCELED";
 
       const depDelay = this._delayMinutes(attr["Departure Time"], attr["Departure Time Real"]);
 
@@ -215,10 +322,10 @@ class DbInfoCard extends HTMLElement {
       const summaryHtml = `
         <tr class="detail-summary-row">
           <td colspan="4">
-            <span class="summary-pill">⏱ ${attr.Duration || "–"}</span>
-            <span class="summary-pill">🔁 ${attr.Transfers !== undefined ? attr.Transfers : "–"} Umstiege</span>
-            ${depDelay > 0 ? `<span class="summary-pill delay-pill">+${depDelay} Min Verspätung</span>` : ""}
-            ${problems ? `<span class="summary-pill problem-pill">⚠️ ${problems}</span>` : ""}
+            <span class="summary-pill">⏱ ${esc(attr.Duration || "–")}</span>
+            <span class="summary-pill">🔁 ${esc(attr.Transfers !== undefined ? attr.Transfers : "–")} ${Number(attr.Transfers) === 1 ? "Umstieg" : "Umstiege"}</span>
+            ${depDelay > 0 ? `<span class="summary-pill ${this._delayClass(depDelay)}">+${depDelay} Min Verspätung</span>` : ""}
+            ${problem ? `<span class="summary-pill problem-pill">⚠️ ${esc(problem.text)}</span>` : ""}
           </td>
         </tr>`;
 
@@ -227,11 +334,14 @@ class DbInfoCard extends HTMLElement {
         : "background-color:var(--table-row-background-color);";
 
       return `
-        <tr class="main-row" data-idx="${idx}" style="${bgStyle}cursor:pointer;">
-          ${showStart ? `<td class="left">${this._formatStart(attr.Departure)}</td>` : ""}
-          <td class="left">${attr.Name || "–"}</td>
-          <td class="center">${this._renderTimeCell(attr["Departure Time"], attr["Departure Time Real"], threshold)}</td>
-          <td class="center">${this._renderTimeCell(attr["Arrival Time"], attr["Arrival Time Real"], threshold)}</td>
+        <tr class="main-row${canceled ? " canceled" : ""}" data-key="${esc(key)}" style="${bgStyle}cursor:pointer;">
+          ${showStart ? `<td class="left">${esc(this._formatStart(attr.Departure))}</td>` : ""}
+          <td class="left">
+            <span class="conn-name">${esc(attr.Name || "–")}</span>
+            ${problem ? `<span class="problem-tag">${esc(problem.text)}</span>` : ""}
+          </td>
+          <td class="center time-cell">${this._renderTimeCell(attr["Departure Time"], attr["Departure Time Real"], threshold)}</td>
+          <td class="center time-cell">${this._renderTimeCell(attr["Arrival Time"], attr["Arrival Time Real"], threshold)}</td>
           <td class="center expand-cell">${isExpanded ? "▴" : "▾"}</td>
         </tr>
         <tr class="detail-row" style="${bgStyle}">
@@ -251,9 +361,12 @@ class DbInfoCard extends HTMLElement {
         </tr>`;
     }).join("");
 
+    const emptyText = this._prefixFound
+      ? "Aktuell keine Verbindungen verfügbar."
+      : `Keine Sensoren gefunden für Prefix: <code>${esc(this._config.entity_prefix)}</code>`;
     const emptyHtml = sensors.length === 0
       ? `<tr><td colspan="5" style="padding:16px;text-align:center;color:var(--secondary-text-color)">
-           Keine Verbindungen gefunden für Prefix: <code>${this._config.entity_prefix}</code>
+           ${emptyText}
          </td></tr>`
       : "";
 
@@ -261,12 +374,28 @@ class DbInfoCard extends HTMLElement {
       <style>
         :host { display: block; }
 
-        .card-wrap { overflow: auto; }
+        /* padding on a border-collapse table has no effect -> wrapper */
+        .card-wrap { overflow: auto; padding: 8px; }
 
         table.main-table {
           width: 100%;
-          padding: 16px;
           border-collapse: collapse;
+        }
+
+        .main-row.canceled .conn-name {
+          text-decoration: line-through;
+          color: var(--error-color, red);
+        }
+        .problem-tag {
+          display: block;
+          font-size: 0.75em;
+          color: var(--warning-color, orange);
+        }
+        .main-row.canceled .problem-tag { color: var(--error-color, red); }
+        /* no green "on time" for a cancelled connection */
+        .main-row.canceled .time-cell span {
+          color: var(--secondary-text-color) !important;
+          text-decoration: line-through;
         }
 
         thead th {
@@ -330,7 +459,6 @@ class DbInfoCard extends HTMLElement {
           margin-right: 5px;
           color: var(--primary-text-color);
         }
-        .delay-pill   { color: red; }
         .problem-pill { color: var(--warning-color, orange); }
 
         .detail-divider td {
@@ -383,7 +511,7 @@ class DbInfoCard extends HTMLElement {
         .delay-slight { background: rgba(76,175,80,0.12); color: green; }
       </style>
 
-      <ha-card${title ? ` header="${title}"` : ""}>
+      <ha-card${title ? ` header="${esc(title)}"` : ""}>
         <div class="card-wrap">
           <table class="main-table">
             <thead>
@@ -403,19 +531,17 @@ class DbInfoCard extends HTMLElement {
         </div>
       </ha-card>
     `;
-
-    // Click handler
-    this.shadowRoot.querySelectorAll(".main-row").forEach(row => {
-      row.addEventListener("click", () => {
-        const idx = parseInt(row.getAttribute("data-idx"));
-        this._expandedRow = this._expandedRow === idx ? null : idx;
-        this._render();
-      });
-    });
   }
 
+  // 1 unit = ~50px: header + table head + one row per connection
   getCardSize() {
-    return 5;
+    const rows = parseInt(this._config?.max_connections) || 5;
+    return (this._config?.title ? 1 : 0) + 1 + rows;
+  }
+
+  // Sections dashboard: full width by default, height grows with the details
+  getGridOptions() {
+    return { columns: 12, min_columns: 6, rows: "auto" };
   }
 
   static getConfigElement() {
@@ -485,7 +611,7 @@ class DbInfoCardEditor extends HTMLElement {
     const hideCity = this._hideCityText();
 
     const options = groups.map(([prefix, label]) =>
-      `<option value="${prefix}" ${prefix === currentPrefix ? "selected" : ""}>${label}</option>`
+      `<option value="${esc(prefix)}" ${prefix === currentPrefix ? "selected" : ""}>${esc(label)}</option>`
     ).join("");
 
     this.shadowRoot.innerHTML = `
@@ -519,7 +645,7 @@ class DbInfoCardEditor extends HTMLElement {
 
         <label>
           Kartentitel (optional)
-          <input type="text" id="title" value="${title}" placeholder="z.B. Zuhause → Würzburg Hbf">
+          <input type="text" id="title" value="${esc(title)}" placeholder="z.B. Zuhause → Würzburg Hbf">
         </label>
 
         <label>
@@ -534,7 +660,7 @@ class DbInfoCardEditor extends HTMLElement {
 
         <label>
           Ortsnamen aus Start ausblenden (optional)
-          <input type="text" id="hide_city" value="${hideCity}" placeholder="z.B. Stuttgart, S-Feuerbach">
+          <input type="text" id="hide_city" value="${esc(hideCity)}" placeholder="z.B. Stuttgart, S-Feuerbach">
           <span class="hint">Entfernt diese Ortsnamen aus der Start-Spalte, mehrere mit Komma trennen</span>
         </label>
 

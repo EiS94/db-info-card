@@ -69,7 +69,7 @@ title: Zuhause → Würzburg Hbf      # optional
 show_start: true                   # optional, default: true
 delay_threshold: 5                 # optional, default: 5
 max_connections: 5                 # optional, default: 5
-hide_city: Würzburg                # optional
+hide_city: Würzburg, Randersacker   # optional, comma-separated
 ```
 
 ### Options
@@ -81,7 +81,7 @@ hide_city: Würzburg                # optional
 | `show_start`      | `boolean` | `true`       | Show or hide the "Start" column                                                                            |
 | `delay_threshold` | `number`  | `5`          | Minutes of delay from which the time is shown in red                                                       |
 | `max_connections` | `number`  | `5`          | Number of connections to display (1–5). The integration always fetches 5; this limits how many are shown   |
-| `hide_city`       | `string`  | _(none)_     | Hides the name of the city in the start column, e.g. `Letzter Hieb, Würzburg` transforms to `Letzter Hieb` |
+| `hide_city`       | `string`  | _(none)_     | Hides city names in the start column, e.g. `Letzter Hieb, Würzburg` → `Letzter Hieb`, `Darmstadt-Wixhausen` → `Wixhausen`. Multiple cities can be given comma-separated (`Stuttgart, S-Feuerbach`) or as a YAML list |
 
 ---
 

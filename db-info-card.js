@@ -27,18 +27,25 @@ class DbInfoCard extends HTMLElement {
     this._render();
   }
 
-  _formatTime(isoString) {
+  // The integration sends "2026-08-19T19:59:00+0200" (offset without colon),
+  // which Safari/iOS can't parse -> normalize to "+02:00" first
+  _parseDate(isoString) {
     if (!isoString) return null;
-    const d = new Date(isoString);
-    if (isNaN(d.getTime())) return null;
+    const normalized = String(isoString).replace(/([+-]\d{2})(\d{2})$/, "$1:$2");
+    const d = new Date(normalized);
+    return isNaN(d.getTime()) ? null : d;
+  }
+
+  _formatTime(isoString) {
+    const d = this._parseDate(isoString);
+    if (!d) return null;
     return d.toLocaleTimeString("de-DE", { hour: "2-digit", minute: "2-digit" });
   }
 
   _delayMinutes(planned, real) {
-    if (!planned || !real) return 0;
-    const p = new Date(planned);
-    const r = new Date(real);
-    if (isNaN(p.getTime()) || isNaN(r.getTime())) return 0;
+    const p = this._parseDate(planned);
+    const r = this._parseDate(real);
+    if (!p || !r) return 0;
     return Math.round((r - p) / 60000);
   }
 
@@ -69,17 +76,26 @@ class DbInfoCard extends HTMLElement {
     const prefix = this._config.entity_prefix;
     const sensors = [];
     for (const entityId of Object.keys(this._hass.states)) {
-      if (entityId.startsWith(prefix)) {
-        sensors.push(this._hass.states[entityId]);
-      }
+      if (!entityId.startsWith(prefix)) continue;
+      const sensor = this._hass.states[entityId];
+      // Sensors without a connection (state "unknown", no attributes) are skipped
+      if (!this._departureTimestamp(sensor)) continue;
+      sensors.push(sensor);
     }
-    sensors.sort((a, b) => {
-      const ta = a.attributes["Departure Time Real"] || a.attributes["Departure Time"] || "";
-      const tb = b.attributes["Departure Time Real"] || b.attributes["Departure Time"] || "";
-      return new Date(ta) - new Date(tb);
-    });
+    // Comparator must never return NaN, otherwise the sort order is undefined
+    // (an empty sensor used to push connection 1 to the end of the list)
+    sensors.sort((a, b) =>
+      (this._departureTimestamp(a) - this._departureTimestamp(b)) ||
+      a.entity_id.localeCompare(b.entity_id, undefined, { numeric: true })
+    );
     const max = Math.min(parseInt(this._config.max_connections) || 5, sensors.length);
     return sensors.slice(0, max);
+  }
+
+  _departureTimestamp(sensor) {
+    const attr = sensor.attributes || {};
+    const d = this._parseDate(attr["Departure Time Real"]) || this._parseDate(attr["Departure Time"]);
+    return d ? d.getTime() : null;
   }
 
   _renderSegment(seg) {
@@ -129,16 +145,31 @@ class DbInfoCard extends HTMLElement {
       </tr>`;
   }
 
+  // hide_city accepts a comma-separated string ("Stuttgart, S-Feuerbach") or a YAML list
+  _hideCities() {
+    const raw = this._config.hide_city;
+    const list = Array.isArray(raw) ? raw : String(raw || "").split(",");
+    return list
+      .map(c => String(c).trim().replace(/[\s,\-–\/]+$/, ""))
+      .filter(c => c)
+      // longest first, so "Darmstadt-Wixhausen" wins over "Darmstadt"
+      .sort((a, b) => b.length - a.length);
+  }
+
   _formatStart(departure) {
     if (!departure) return "–";
-    const city = (this._config.hide_city || "").trim();
-    if (!city) return departure;
-    const escaped = city.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-    let result = departure
-      .replace(new RegExp("^" + escaped + "\\s+", "i"), "")
-      .replace(new RegExp(",\\s*" + escaped + "\\b\\s*$", "i"), "")
-      .trim();
-    return result || departure;
+    // separators between city and stop name: "Darmstadt-Wixhausen", "Würzburg Hbf",
+    // "Letzter Hieb, Würzburg", "Hbf (Würzburg)"
+    const sep = "[\\s,\\-–\\/]+";
+    for (const city of this._hideCities()) {
+      const escaped = city.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      const result = departure
+        .replace(new RegExp("^" + escaped + sep, "i"), "")
+        .replace(new RegExp("(?:" + sep + escaped + "|\\s*\\(" + escaped + "\\))\\s*$", "i"), "")
+        .trim();
+      if (result && result !== departure) return result;
+    }
+    return departure;
   }
 
   _render() {
@@ -424,6 +455,11 @@ class DbInfoCardEditor extends HTMLElement {
     }
   }
 
+  _hideCityText() {
+    const raw = this._config.hide_city;
+    return Array.isArray(raw) ? raw.join(", ") : (raw || "");
+  }
+
   _getConnectionGroups() {
     if (!this._hass) return [];
     const groups = {};
@@ -446,7 +482,7 @@ class DbInfoCardEditor extends HTMLElement {
     const threshold = this._config.delay_threshold ?? 5;
     const title = this._config.title || "";
     const maxConn = this._config.max_connections ?? 5;
-    const hideCity = this._config.hide_city || "";
+    const hideCity = this._hideCityText();
 
     const options = groups.map(([prefix, label]) =>
       `<option value="${prefix}" ${prefix === currentPrefix ? "selected" : ""}>${label}</option>`
@@ -497,9 +533,9 @@ class DbInfoCardEditor extends HTMLElement {
         </label>
 
         <label>
-          Stadtname aus Start ausblenden (optional)
-          <input type="text" id="hide_city" value="${hideCity}" placeholder="z.B. Würzburg">
-          <span class="hint">Entfernt diesen Ortsnamen aus der Start-Spalte</span>
+          Ortsnamen aus Start ausblenden (optional)
+          <input type="text" id="hide_city" value="${hideCity}" placeholder="z.B. Stuttgart, S-Feuerbach">
+          <span class="hint">Entfernt diese Ortsnamen aus der Start-Spalte, mehrere mit Komma trennen</span>
         </label>
 
         <div class="row">
@@ -555,7 +591,7 @@ class DbInfoCardEditor extends HTMLElement {
     if (document.activeElement !== title) title.value = this._config.title || "";
     if (document.activeElement !== threshold) threshold.value = this._config.delay_threshold ?? 5;
     if (document.activeElement !== maxConn) maxConn.value = this._config.max_connections ?? 5;
-    if (hideCity && document.activeElement !== hideCity) hideCity.value = this._config.hide_city || "";
+    if (hideCity && document.activeElement !== hideCity) hideCity.value = this._hideCityText();
     showStart.checked = this._config.show_start !== false;
   }
 

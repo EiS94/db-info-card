@@ -80,16 +80,18 @@ class DbInfoCard extends HTMLElement {
     if (!config.entity_prefix) {
       throw new Error("Bitte 'entity_prefix' angeben, z.B. sensor.home_hbf_verbindung_");
     }
-    // Optionale Spalten: show_start (default: true), delay_threshold (default: 5), hide_city (default: "")
+    // Optionale Spalten: show_start (default: true), show_problems (default: false), delay_threshold (default: 5), hide_city (default: "")
     this._config = {
       show_start: true,
+      show_problems: false,
       delay_threshold: 5,
       max_connections: 5,
       hide_city: "",
       ...config
     };
     this._lastStates = null;
-    this._render();
+    // goes through the hass setter, so the sensor snapshot matches the new prefix
+    if (this._hass) this.hass = this._hass;
   }
 
   // hass is set on every state change in Home Assistant -> only re-render
@@ -338,7 +340,7 @@ class DbInfoCard extends HTMLElement {
           ${showStart ? `<td class="left">${esc(this._formatStart(attr.Departure))}</td>` : ""}
           <td class="left">
             <span class="conn-name">${esc(attr.Name || "–")}</span>
-            ${problem ? `<span class="problem-tag">${esc(problem.text)}</span>` : ""}
+            ${problem && this._config.show_problems ? `<span class="problem-tag">${esc(problem.text)}</span>` : ""}
           </td>
           <td class="center time-cell">${this._renderTimeCell(attr["Departure Time"], attr["Departure Time Real"], threshold)}</td>
           <td class="center time-cell">${this._renderTimeCell(attr["Arrival Time"], attr["Arrival Time Real"], threshold)}</td>
@@ -549,7 +551,7 @@ class DbInfoCard extends HTMLElement {
   }
 
   static getStubConfig() {
-    return { entity_prefix: "", title: "", show_start: true, delay_threshold: 5, max_connections: 5, hide_city: "" };
+    return { entity_prefix: "", title: "", show_start: true, show_problems: false, delay_threshold: 5, max_connections: 5, hide_city: "" };
   }
 }
 
@@ -565,7 +567,7 @@ class DbInfoCardEditor extends HTMLElement {
   }
 
   setConfig(config) {
-    this._config = { show_start: true, delay_threshold: 5, max_connections: 5, hide_city: "", ...config };
+    this._config = { show_start: true, show_problems: false, delay_threshold: 5, max_connections: 5, hide_city: "", ...config };
     if (this._initialized) {
       this._updateValues();
     }
@@ -605,6 +607,7 @@ class DbInfoCardEditor extends HTMLElement {
     const groups = this._getConnectionGroups();
     const currentPrefix = this._config.entity_prefix || "";
     const showStart = this._config.show_start !== false;
+    const showProblems = this._config.show_problems === true;
     const threshold = this._config.delay_threshold ?? 5;
     const title = this._config.title || "";
     const maxConn = this._config.max_connections ?? 5;
@@ -670,6 +673,13 @@ class DbInfoCardEditor extends HTMLElement {
             Startspalte anzeigen
           </label>
         </div>
+
+        <div class="row">
+          <label>
+            <input type="checkbox" id="show_problems" ${showProblems ? "checked" : ""}>
+            Warnungen unter der Verbindung anzeigen (z.B. „Anschluss gefährdet“)
+          </label>
+        </div>
       </div>
     `;
 
@@ -699,6 +709,11 @@ class DbInfoCardEditor extends HTMLElement {
       this._fireChange();
     });
 
+    this.shadowRoot.getElementById("show_problems").addEventListener("change", (e) => {
+      this._config = { ...this._config, show_problems: e.target.checked };
+      this._fireChange();
+    });
+
     this.shadowRoot.getElementById("hide_city").addEventListener("change", (e) => {
       this._config = { ...this._config, hide_city: e.target.value };
       this._fireChange();
@@ -719,6 +734,7 @@ class DbInfoCardEditor extends HTMLElement {
     if (document.activeElement !== maxConn) maxConn.value = this._config.max_connections ?? 5;
     if (hideCity && document.activeElement !== hideCity) hideCity.value = this._hideCityText();
     showStart.checked = this._config.show_start !== false;
+    this.shadowRoot.getElementById("show_problems").checked = this._config.show_problems === true;
   }
 
   _updateOptions() {

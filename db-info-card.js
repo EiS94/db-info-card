@@ -11,6 +11,8 @@ function esc(value) {
     .replace(/'/g, "&#39;");
 }
 
+const SKINS = ["default", "db", "db-compact"];
+
 // The integration sends "Problems" as str(TrainProblem.X)
 const PROBLEM_TEXTS = {
   DELAY: "Verspätung",
@@ -81,7 +83,8 @@ class DbInfoCard extends HTMLElement {
       throw new Error("Bitte 'entity_prefix' angeben, z.B. sensor.home_hbf_verbindung_");
     }
     // Optionale Spalten: show_start (default: true), show_problems (default: false), delay_threshold (default: 5), hide_city (default: "")
-    // skin: "default" (table) or "db" (layout modelled on bahn.de)
+    // skin: "default" (table), "db" (layout modelled on bahn.de) or
+    // "db-compact" (db look, collapsed rows as small as in the table)
     this._config = {
       skin: "default",
       show_start: true,
@@ -106,8 +109,11 @@ class DbInfoCard extends HTMLElement {
       .filter(id => id.startsWith(prefix))
       .map(id => hass.states[id]);
     const last = this._lastStates;
-    if (last && last.length === states.length && states.every((s, i) => s === last[i])) return;
+    // the default skin picks its status colours by light/dark mode
+    const dark = !!(hass.themes && hass.themes.darkMode);
+    if (last && dark === this._dark && last.length === states.length && states.every((s, i) => s === last[i])) return;
     this._lastStates = states;
+    this._dark = dark;
     this._render();
   }
 
@@ -121,8 +127,10 @@ class DbInfoCard extends HTMLElement {
     });
   }
 
+  // Arrival stop and time are part of the key: the same train can show up
+  // twice with different stops to get off (e.g. two bus stops near the destination)
   _connectionKey(attr) {
-    return `${attr.Name}|${attr["Departure Time"]}`;
+    return [attr.Name, attr.Departure, attr["Departure Time"], attr.Arrival, attr["Arrival Time"]].join("|");
   }
 
   _parseDetails(details) {
@@ -190,7 +198,7 @@ class DbInfoCard extends HTMLElement {
     const delay = this._delayMinutes(planned, real);
 
     // No estimated data -> show nothing
-    if (!pt) return `<span style="color:var(--secondary-text-color)">–</span>`;
+    if (!pt) return `<span class="t-none">–</span>`;
 
     // no realtime data -> estimated data in default font color
     if (!rt) {
@@ -199,11 +207,11 @@ class DbInfoCard extends HTMLElement {
 
     // realtime data available: check delay
     if (delay >= threshold) {
-      return `<span style="display:block;color:grey;text-decoration:line-through;font-size:0.85em;line-height:1.3">${pt}</span><span style="display:block;color:red;line-height:1.3">${rt}</span>`;
+      return `<span class="t-planned">${pt}</span><span class="t-real t-late">${rt}</span>`;
     } else if (pt === rt) {
-      return `<span style="color:green">${pt}</span>`;
+      return `<span class="t-ontime">${pt}</span>`;
     } else {
-      return `<span style="display:block;color:grey;text-decoration:line-through;font-size:0.85em;line-height:1.3">${pt}</span><span style="display:block;color:green;line-height:1.3">${rt}</span>`;
+      return `<span class="t-planned">${pt}</span><span class="t-real t-ontime">${rt}</span>`;
     }
   }
 
@@ -334,6 +342,8 @@ class DbInfoCard extends HTMLElement {
   // Unknown names get no class and keep the neutral grey.
   _productClass(name) {
     if (!name) return "";
+    // rail replacement service is named after its line, e.g. "Bus RE54"
+    if (/^\s*Bus\b/i.test(name)) return "db-p-bus";
     if (/\b(ICE|ECE|TGV|RJX?|NJ|EN|FLX)\b|\b(ICE|ECE|TGV|RJX?|NJ|EN|FLX)\s*\d|Fernzug|Intercity-?Express/.test(name)) return "db-p-ice";
     if (/\b(IC|EC)\b|\b(IC|EC)\s*\d|Intercity|Eurocity/.test(name)) return "db-p-ic";
     if (/\bS\s*\d|S-Bahn/.test(name)) return "db-p-s";
@@ -351,7 +361,9 @@ class DbInfoCard extends HTMLElement {
     const parts = details.map(seg => {
       if (seg.Name === "Fußweg") return `<span class="db-bar-walk" title="Fußweg">🚶</span>`;
       const grow = Math.max(this._segmentMinutes(seg) || 1, 1);
-      return `<span class="db-bar-leg ${this._productClass(seg.Name)}" style="flex-grow:${grow}">${esc(seg.Name || "–")}</span>`;
+      // "RE54 (32884)" -> "RE54": the train number only costs space in the bar
+      const label = String(seg.Name || "–").replace(/\s*\(\d+\)\s*$/, "");
+      return `<span class="db-bar-leg ${this._productClass(seg.Name)}" style="flex-grow:${grow}" title="${esc(seg.Name || "")}">${esc(label)}</span>`;
     });
     return parts.length ? `<div class="db-bar">${parts.join("")}</div>` : "";
   }
@@ -417,7 +429,21 @@ class DbInfoCard extends HTMLElement {
     return out.join("");
   }
 
-  _renderDbSkin(sensors) {
+  // One-line variant for the compact skin: like the default skin, the realtime
+  // value replaces the planned time instead of being stacked below it
+  _dbCompactTime(planned, real, canceled) {
+    const pt = this._formatTime(planned);
+    if (!pt) return `<span class="db-t db-muted">–</span>`;
+    if (canceled) return `<span class="db-t db-strike">${pt}</span>`;
+    const rt = this._formatTime(real);
+    if (!rt) return `<span class="db-t">${pt}</span>`;
+    if (pt === rt) return `<span class="db-t db-ontime">${pt}</span>`;
+    const late = this._delayMinutes(planned, real) >= this._config.delay_threshold;
+    return `<span class="dbc-planned">${pt}</span><span class="db-t ${late ? "db-late" : "db-ontime"}">${rt}</span>`;
+  }
+
+  // compact: collapsed rows are as tall as those of the default skin
+  _renderDbSkin(sensors, compact = false) {
     const title = this._config.title || "";
 
     const rowsHtml = sensors.map(sensor => {
@@ -441,6 +467,37 @@ class DbInfoCard extends HTMLElement {
         ? `<div class="db-notice${canceled ? " db-notice-error" : ""}">${esc(problem.text)}</div>` : "";
       const detailNotice = problem && !canceled && !this._config.show_problems
         ? `<div class="db-notice db-notice-detail">${esc(problem.text)}</div>` : "";
+
+      if (compact) {
+        const warn = problem && (canceled || this._config.show_problems)
+          ? `<span class="dbc-warn${canceled ? " db-notice-error" : ""}" title="${esc(problem.text)}">⚠</span>` : "";
+        return `
+        <div class="db-conn${canceled ? " db-canceled" : ""}">
+          <div class="main-row db-head dbc-head" data-key="${esc(key)}">
+            ${this._config.show_start ? `<div class="dbc-start">${esc(this._formatStart(attr.Departure))}</div>` : ""}
+            <div class="dbc-times">
+              <span class="db-tcol">${this._dbCompactTime(attr["Departure Time"], attr["Departure Time Real"], canceled)}</span>
+              <span class="db-dash">–</span>
+              <span class="db-tcol">${this._dbCompactTime(attr["Arrival Time"], attr["Arrival Time Real"], canceled)}</span>
+            </div>
+            ${this._dbProductBar(details) || `<div class="db-bar"></div>`}
+            ${attr.Duration ? `<div class="dbc-dur">${esc(attr.Duration)}</div>` : ""}
+            ${warn}
+            <div class="expand-cell">${isExpanded ? "▴" : "▾"}</div>
+          </div>
+          <div class="db-detail">
+            <div class="detail-wrap${isExpanded ? " wrap-open" : ""}">
+              <div class="detail-inner">
+                <div class="db-timeline">
+                  ${meta ? `<div class="dbc-meta">${meta}</div>` : ""}
+                  ${problem ? `<div class="db-notice db-notice-detail${canceled ? " db-notice-error" : ""}">${esc(problem.text)}</div>` : ""}
+                  ${this._dbTimeline(details)}
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>`;
+      }
 
       return `
         <div class="db-conn${canceled ? " db-canceled" : ""}">
@@ -658,10 +715,54 @@ class DbInfoCard extends HTMLElement {
         .db-transfer-text { color: var(--db-muted); font-size: 0.9em; padding: 10px 0; }
 
         .db-empty { padding: 16px 0; text-align: center; color: var(--db-muted); }
+
+        /* Compact variant: one line per connection */
+        .db-compact { container-type: inline-size; padding: 4px 16px; }
+        .dbc-head {
+          display: flex;
+          align-items: center;
+          gap: 10px;
+          padding: 0.5em 0;
+        }
+        .dbc-start {
+          flex: 0 1 22%;
+          min-width: 0;
+          overflow: hidden;
+          text-overflow: ellipsis;
+          white-space: nowrap;
+        }
+        .dbc-times { display: flex; align-items: flex-end; gap: 4px; flex: 0 0 auto; }
+        .dbc-times .db-tcol { align-items: center; }
+        .dbc-planned {
+          color: var(--db-muted);
+          text-decoration: line-through;
+          font-size: 0.85em;
+          line-height: 1.3;
+          font-variant-numeric: tabular-nums;
+        }
+        .dbc-times .db-t { line-height: 1.3; }
+        .dbc-head .db-bar { flex: 1 1 0; min-width: 0; margin-top: 0; }
+        .dbc-head .db-bar-leg {
+          min-width: 0;
+          padding: 2px 6px;
+          overflow: hidden;
+          text-overflow: ellipsis;
+        }
+        .dbc-dur { flex: 0 0 auto; color: var(--db-muted); font-size: 0.9em; white-space: nowrap; }
+        .dbc-warn { flex: 0 0 auto; color: var(--warning-color, #c75f00); }
+        .dbc-warn.db-notice-error { color: var(--db-red); }
+        .dbc-head .expand-cell { flex: 0 0 auto; color: var(--db-muted); }
+        .dbc-meta { color: var(--db-muted); font-size: 0.95em; margin: 0 0 10px 0; }
+        @container (max-width: 400px) {
+          .dbc-dur { display: none; }
+        }
+        @container (max-width: 330px) {
+          .dbc-start { display: none; }
+        }
       </style>
 
       <ha-card${title ? ` header="${esc(title)}"` : ""}>
-        <div class="db">
+        <div class="db${compact ? " db-compact" : ""}">
           ${emptyHtml}
           ${rowsHtml}
         </div>
@@ -680,6 +781,7 @@ class DbInfoCard extends HTMLElement {
 
     const sensors = this._getSensors();
     if (this._config.skin === "db") return this._renderDbSkin(sensors);
+    if (this._config.skin === "db-compact") return this._renderDbSkin(sensors, true);
 
     const title = this._config.title || "";
     const showStart = this._config.show_start;
@@ -709,9 +811,7 @@ class DbInfoCard extends HTMLElement {
           </td>
         </tr>`;
 
-      const bgStyle = isOdd
-        ? "background-color:var(--table-row-alternative-background-color);"
-        : "background-color:var(--table-row-background-color);";
+      const bgStyle = isOdd ? "background-color:var(--dbi-row-alt);" : "";
 
       return `
         <tr class="main-row${canceled ? " canceled" : ""}" data-key="${esc(key)}" style="${bgStyle}cursor:pointer;">
@@ -753,7 +853,32 @@ class DbInfoCard extends HTMLElement {
         :host { display: block; }
 
         /* padding on a border-collapse table has no effect -> wrapper */
-        .card-wrap { overflow: auto; padding: 8px; }
+        .card-wrap {
+          overflow: auto;
+          padding: 8px;
+          /* Rows sit on the card background; the zebra stripe is a translucent
+             overlay, so it works on any light or dark theme */
+          --dbi-row-alt: var(--db-info-row-alternative-color, rgba(127, 127, 127, 0.1));
+          --dbi-ontime: var(--db-info-ontime-color, #2e7d32);
+          --dbi-late: var(--db-info-late-color, #d32f2f);
+          --dbi-warn: var(--warning-color, #c75f00);
+        }
+        /* brighter status colours for readable contrast on dark cards */
+        .card-wrap.dark {
+          --dbi-ontime: var(--db-info-ontime-color, #66bb6a);
+          --dbi-late: var(--db-info-late-color, #ff6b61);
+          --dbi-warn: var(--warning-color, #ffa726);
+        }
+
+        .t-none { color: var(--secondary-text-color); }
+        .t-planned, .t-real { display: block; line-height: 1.3; }
+        .t-planned {
+          color: var(--secondary-text-color);
+          text-decoration: line-through;
+          font-size: 0.85em;
+        }
+        .t-ontime { color: var(--dbi-ontime); }
+        .t-late { color: var(--dbi-late); }
 
         table.main-table {
           width: 100%;
@@ -762,14 +887,14 @@ class DbInfoCard extends HTMLElement {
 
         .main-row.canceled .conn-name {
           text-decoration: line-through;
-          color: var(--error-color, red);
+          color: var(--dbi-late);
         }
         .problem-tag {
           display: block;
           font-size: 0.75em;
-          color: var(--warning-color, orange);
+          color: var(--dbi-warn);
         }
-        .main-row.canceled .problem-tag { color: var(--error-color, red); }
+        .main-row.canceled .problem-tag { color: var(--dbi-late); }
         /* no green "on time" for a cancelled connection */
         .main-row.canceled .time-cell span {
           color: var(--secondary-text-color) !important;
@@ -795,7 +920,7 @@ class DbInfoCard extends HTMLElement {
         td.left   { text-align: left; }
         td.center { text-align: center; }
 
-        .main-row:hover td { filter: brightness(1.06); }
+        .main-row:hover td { background: rgba(127, 127, 127, 0.08); }
 
         .expand-cell {
           color: var(--secondary-text-color);
@@ -830,14 +955,14 @@ class DbInfoCard extends HTMLElement {
 
         .summary-pill {
           display: inline-block;
-          background: var(--secondary-background-color, rgba(0,0,0,0.06));
+          background: rgba(127, 127, 127, 0.16);
           border-radius: 12px;
           padding: 2px 10px;
           font-size: 0.82em;
           margin-right: 5px;
           color: var(--primary-text-color);
         }
-        .problem-pill { color: var(--warning-color, orange); }
+        .problem-pill { color: var(--dbi-warn); }
 
         .detail-divider td {
           border-top: 1px solid var(--divider-color, rgba(0,0,0,0.08));
@@ -874,7 +999,7 @@ class DbInfoCard extends HTMLElement {
         .stop-platform { width: 4em; text-align: right; }
 
         .platform {
-          background: var(--secondary-background-color, rgba(0,0,0,0.06));
+          background: rgba(127, 127, 127, 0.16);
           border-radius: 4px;
           padding: 1px 5px;
           font-size: 0.8em;
@@ -886,12 +1011,12 @@ class DbInfoCard extends HTMLElement {
           border-radius: 10px;
           padding: 1px 7px;
         }
-        .delay-late   { background: rgba(244,67,54,0.12); color: red; }
-        .delay-slight { background: rgba(76,175,80,0.12); color: green; }
+        .delay-late   { background: rgba(244,67,54,0.14); color: var(--dbi-late); }
+        .delay-slight { background: rgba(76,175,80,0.14); color: var(--dbi-ontime); }
       </style>
 
       <ha-card${title ? ` header="${esc(title)}"` : ""}>
-        <div class="card-wrap">
+        <div class="card-wrap${this._dark ? " dark" : ""}">
           <table class="main-table">
             <thead>
               <tr>
@@ -917,6 +1042,7 @@ class DbInfoCard extends HTMLElement {
     const rows = parseInt(this._config?.max_connections) || 5;
     // the db skin has no table head, but each connection is about twice as tall
     if (this._config?.skin === "db") return (this._config?.title ? 1 : 0) + rows * 2;
+    if (this._config?.skin === "db-compact") return (this._config?.title ? 1 : 0) + rows;
     return (this._config?.title ? 1 : 0) + 1 + rows;
   }
 
@@ -937,34 +1063,67 @@ class DbInfoCard extends HTMLElement {
 customElements.define("db-info-card", DbInfoCard);
 
 
+// The editor is built from Home Assistant's own form elements (ha-form with
+// selectors), so it looks and behaves like the editors of the built-in cards
+const EDITOR_LABELS = {
+  entity_prefix: "Verbindung",
+  title: "Titel (optional)",
+  skin: "Design",
+  delay_threshold: "Verspätung in Rot ab",
+  max_connections: "Anzahl Verbindungen",
+  hide_city: "Ortsnamen ausblenden (optional)",
+  show_start: "Start anzeigen",
+  show_problems: "Warnungen unter der Verbindung anzeigen",
+};
+
+const EDITOR_HELPERS = {
+  entity_prefix: "Es werden nur Sensoren der DB Info Integration angeboten",
+  hide_city: "Entfernt diese Ortsnamen aus dem Start, mehrere mit Komma trennen (z.B. Stuttgart, S-Feuerbach)",
+  show_problems: "z.B. „Anschluss gefährdet“. In den Details stehen sie immer",
+};
+
 class DbInfoCardEditor extends HTMLElement {
   constructor() {
     super();
     this.attachShadow({ mode: "open" });
     this._config = {};
-    this._initialized = false;
   }
 
   setConfig(config) {
-    this._config = { show_start: true, show_problems: false, delay_threshold: 5, max_connections: 5, hide_city: "", ...config };
-    if (this._initialized) {
-      this._updateValues();
-    }
+    this._config = { ...config };
+    this._update();
   }
 
   set hass(hass) {
     this._hass = hass;
-    if (!this._initialized) {
-      this._buildDOM();
-      this._initialized = true;
-    } else {
-      this._updateOptions();
-    }
+    this._update();
   }
 
-  _hideCityText() {
-    const raw = this._config.hide_city;
-    return Array.isArray(raw) ? raw.join(", ") : (raw || "");
+  connectedCallback() {
+    this._ensureForm();
+  }
+
+  // ha-form is loaded lazily by Home Assistant. Asking a built-in card for its
+  // editor pulls it in if no other editor has been opened yet
+  async _ensureForm() {
+    if (this._form || this._loading) return;
+    this._loading = true;
+    try {
+      if (!customElements.get("ha-form") && window.loadCardHelpers) {
+        const helpers = await window.loadCardHelpers();
+        const card = await helpers.createCardElement({ type: "entities", entities: [] });
+        if (card && card.constructor.getConfigElement) await card.constructor.getConfigElement();
+      }
+    } catch (e) {
+      // fall through: the form upgrades as soon as ha-form gets defined
+    }
+    const form = document.createElement("ha-form");
+    form.computeLabel = (schema) => EDITOR_LABELS[schema.name] || schema.name;
+    form.computeHelper = (schema) => EDITOR_HELPERS[schema.name];
+    form.addEventListener("value-changed", (e) => this._valueChanged(e));
+    this.shadowRoot.appendChild(form);
+    this._form = form;
+    this._update();
   }
 
   _getConnectionGroups() {
@@ -982,180 +1141,95 @@ class DbInfoCardEditor extends HTMLElement {
     return Object.entries(groups).sort((a, b) => a[1].localeCompare(b[1]));
   }
 
-  _buildDOM() {
-    const groups = this._getConnectionGroups();
-    const currentPrefix = this._config.entity_prefix || "";
-    const showStart = this._config.show_start !== false;
-    const showProblems = this._config.show_problems === true;
-    const threshold = this._config.delay_threshold ?? 5;
-    const title = this._config.title || "";
-    const maxConn = this._config.max_connections ?? 5;
-    const hideCity = this._hideCityText();
-
-    const options = groups.map(([prefix, label]) =>
-      `<option value="${esc(prefix)}" ${prefix === currentPrefix ? "selected" : ""}>${esc(label)}</option>`
-    ).join("");
-
-    this.shadowRoot.innerHTML = `
-      <style>
-        .editor { padding: 16px; display: flex; flex-direction: column; gap: 16px; }
-        label { display: flex; flex-direction: column; gap: 4px; font-size: 14px; color: var(--primary-text-color); }
-        select, input[type="text"], input[type="number"] {
-          padding: 8px;
-          border-radius: 6px;
-          border: 1px solid var(--divider-color, #ccc);
-          background: var(--card-background-color);
-          color: var(--primary-text-color);
-          font-size: 14px;
-          width: 100%;
-          box-sizing: border-box;
-        }
-        .row { display: flex; align-items: center; gap: 10px; }
-        .row label { flex-direction: row; align-items: center; gap: 8px; cursor: pointer; }
-        input[type="checkbox"] { width: 18px; height: 18px; cursor: pointer; }
-        .hint { font-size: 12px; color: var(--secondary-text-color); margin-top: 2px; }
-      </style>
-      <div class="editor">
-        <label>
-          Verbindung
-          <select id="prefix">
-            <option value="">- Bitte wählen -</option>
-            ${options}
-          </select>
-          <span class="hint">Nur Sensoren der DB Info Integration werden angezeigt</span>
-        </label>
-
-        <label>
-          Kartentitel (optional)
-          <input type="text" id="title" value="${esc(title)}" placeholder="z.B. Zuhause → Würzburg Hbf">
-        </label>
-
-        <label>
-          Design
-          <select id="skin">
-            <option value="default" ${this._config.skin !== "db" ? "selected" : ""}>Standard (Tabelle)</option>
-            <option value="db" ${this._config.skin === "db" ? "selected" : ""}>Deutsche Bahn (wie bahn.de)</option>
-          </select>
-        </label>
-
-        <label>
-          Verspätungsschwellwert (Minuten, ab dem Rot angezeigt wird)
-          <input type="number" id="threshold" value="${threshold}" min="1" max="60">
-        </label>
-
-        <label>
-          Anzahl angezeigter Verbindungen (1–5)
-          <input type="number" id="max_connections" value="${maxConn}" min="1" max="5">
-        </label>
-
-        <label>
-          Ortsnamen aus Start ausblenden (optional)
-          <input type="text" id="hide_city" value="${esc(hideCity)}" placeholder="z.B. Stuttgart, S-Feuerbach">
-          <span class="hint">Entfernt diese Ortsnamen aus der Start-Spalte, mehrere mit Komma trennen</span>
-        </label>
-
-        <div class="row">
-          <label>
-            <input type="checkbox" id="show_start" ${showStart ? "checked" : ""}>
-            Start anzeigen
-          </label>
-        </div>
-
-        <div class="row">
-          <label>
-            <input type="checkbox" id="show_problems" ${showProblems ? "checked" : ""}>
-            Warnungen unter der Verbindung anzeigen (z.B. „Anschluss gefährdet“)
-          </label>
-        </div>
-      </div>
-    `;
-
-    this.shadowRoot.getElementById("prefix").addEventListener("change", (e) => {
-      this._config = { ...this._config, entity_prefix: e.target.value };
-      this._fireChange();
-    });
-
-    this.shadowRoot.getElementById("title").addEventListener("change", (e) => {
-      this._config = { ...this._config, title: e.target.value };
-      this._fireChange();
-    });
-
-    this.shadowRoot.getElementById("skin").addEventListener("change", (e) => {
-      this._config = { ...this._config, skin: e.target.value };
-      this._fireChange();
-    });
-
-    this.shadowRoot.getElementById("threshold").addEventListener("change", (e) => {
-      this._config = { ...this._config, delay_threshold: parseInt(e.target.value) || 5 };
-      this._fireChange();
-    });
-
-    this.shadowRoot.getElementById("max_connections").addEventListener("change", (e) => {
-      const val = Math.min(5, Math.max(1, parseInt(e.target.value) || 5));
-      this._config = { ...this._config, max_connections: val };
-      this._fireChange();
-    });
-
-    this.shadowRoot.getElementById("show_start").addEventListener("change", (e) => {
-      this._config = { ...this._config, show_start: e.target.checked };
-      this._fireChange();
-    });
-
-    this.shadowRoot.getElementById("show_problems").addEventListener("change", (e) => {
-      this._config = { ...this._config, show_problems: e.target.checked };
-      this._fireChange();
-    });
-
-    this.shadowRoot.getElementById("hide_city").addEventListener("change", (e) => {
-      this._config = { ...this._config, hide_city: e.target.value };
-      this._fireChange();
-    });
+  _schema() {
+    const connections = this._getConnectionGroups().map(([value, label]) => ({ value, label }));
+    // keep a prefix that was typed in YAML and matches no sensor (yet) selectable
+    const current = this._config.entity_prefix;
+    if (current && !connections.some(o => o.value === current)) {
+      connections.push({ value: current, label: current });
+    }
+    return [
+      { name: "entity_prefix", required: true, selector: { select: { mode: "dropdown", options: connections } } },
+      { name: "title", selector: { text: {} } },
+      {
+        name: "skin",
+        selector: {
+          select: {
+            mode: "dropdown",
+            options: [
+              { value: "default", label: "Standard (Tabelle)" },
+              { value: "db", label: "Deutsche Bahn (wie bahn.de)" },
+              { value: "db-compact", label: "Deutsche Bahn kompakt (eine Zeile pro Verbindung)" },
+            ],
+          },
+        },
+      },
+      {
+        type: "grid",
+        name: "",
+        schema: [
+          { name: "max_connections", selector: { number: { min: 1, max: 5, step: 1, mode: "box" } } },
+          { name: "delay_threshold", selector: { number: { min: 1, max: 60, step: 1, mode: "box", unit_of_measurement: "min" } } },
+        ],
+      },
+      { name: "hide_city", selector: { text: {} } },
+      { name: "show_start", selector: { boolean: {} } },
+      { name: "show_problems", selector: { boolean: {} } },
+    ];
   }
 
-  _updateValues() {
-    const prefix = this.shadowRoot.getElementById("prefix");
-    const title = this.shadowRoot.getElementById("title");
-    const threshold = this.shadowRoot.getElementById("threshold");
-    const maxConn = this.shadowRoot.getElementById("max_connections");
-    const hideCity = this.shadowRoot.getElementById("hide_city");
-    const showStart = this.shadowRoot.getElementById("show_start");
-    if (!prefix) return;
-    if (document.activeElement !== prefix) prefix.value = this._config.entity_prefix || "";
-    if (document.activeElement !== title) title.value = this._config.title || "";
-    if (document.activeElement !== threshold) threshold.value = this._config.delay_threshold ?? 5;
-    if (document.activeElement !== maxConn) maxConn.value = this._config.max_connections ?? 5;
-    if (hideCity && document.activeElement !== hideCity) hideCity.value = this._hideCityText();
-    const skin = this.shadowRoot.getElementById("skin");
-    if (skin && document.activeElement !== skin) skin.value = this._config.skin === "db" ? "db" : "default";
-    showStart.checked = this._config.show_start !== false;
-    this.shadowRoot.getElementById("show_problems").checked = this._config.show_problems === true;
+  // Form values: the config with the card's defaults filled in
+  _data() {
+    const c = this._config;
+    return {
+      entity_prefix: c.entity_prefix || "",
+      title: c.title || "",
+      skin: SKINS.includes(c.skin) ? c.skin : "default",
+      max_connections: c.max_connections ?? 5,
+      delay_threshold: c.delay_threshold ?? 5,
+      hide_city: Array.isArray(c.hide_city) ? c.hide_city.join(", ") : (c.hide_city || ""),
+      show_start: c.show_start !== false,
+      show_problems: c.show_problems === true,
+    };
   }
 
-  _updateOptions() {
-    const select = this.shadowRoot.getElementById("prefix");
-    if (!select) return;
-    if (select === this.shadowRoot.activeElement) return;
-    const groups = this._getConnectionGroups();
-    const currentValue = select.value;
-    const existingValues = Array.from(select.options).map(o => o.value).filter(v => v);
-    const newValues = groups.map(([p]) => p);
-    const changed = existingValues.length !== newValues.length ||
-      newValues.some(v => !existingValues.includes(v));
-    if (!changed) return;
-    const placeholder = select.options[0];
-    select.innerHTML = "";
-    select.appendChild(placeholder);
-    groups.forEach(([prefix, label]) => {
-      const opt = document.createElement("option");
-      opt.value = prefix;
-      opt.textContent = label;
-      opt.selected = prefix === currentValue;
-      select.appendChild(opt);
-    });
+  _update() {
+    const form = this._form;
+    if (!form || !this._hass) return;
+    form.hass = this._hass;
+    form.data = this._data();
+    // a new schema object re-renders the form, so only replace it when it changed
+    const schema = this._schema();
+    const signature = JSON.stringify(schema);
+    if (signature !== this._schemaSignature) {
+      this._schemaSignature = signature;
+      form.schema = schema;
+    }
   }
 
-  _fireChange() {
-    this.dispatchEvent(new CustomEvent("config-changed", { detail: { config: this._config }, bubbles: true, composed: true }));
+  _valueChanged(e) {
+    e.stopPropagation();
+    const value = e.detail.value || {};
+    const config = { ...this._config };
+    for (const [key, val] of Object.entries(value)) {
+      // an emptied field falls back to the card's default
+      if (val === undefined || val === null || val === "") delete config[key];
+      else config[key] = val;
+    }
+    const clamp = (key, min, max) => {
+      if (config[key] === undefined) return;
+      const n = parseInt(config[key]);
+      if (isNaN(n)) delete config[key];
+      else config[key] = Math.min(max, Math.max(min, n));
+    };
+    clamp("max_connections", 1, 5);
+    clamp("delay_threshold", 1, 60);
+    // an untouched YAML list stays a list instead of becoming a string
+    if (Array.isArray(this._config.hide_city) && value.hide_city === this._config.hide_city.join(", ")) {
+      config.hide_city = this._config.hide_city;
+    }
+    this._config = config;
+    this.dispatchEvent(new CustomEvent("config-changed", { detail: { config }, bubbles: true, composed: true }));
   }
 }
 

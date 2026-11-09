@@ -92,7 +92,7 @@ hide_city: Würzburg, Randersacker   # optional, comma-separated
 Clicking a row expands it to show:
 
 - **Summary:** Total duration, number of transfers, delay badge, and any problem notices
-- **Segments:** Each leg of the journey with departure/arrival stop, planned and real-time, and platform number
+- **Segments:** Each leg of the journey with departure/arrival stop, planned and real-time, and platform number. If the train continues beyond your stop, its final destination is shown next to the train name (e.g. `RE 9 → Frankfurt Hbf`), matching the platform display. Requires a DB Info version that provides `Departure Direction`
 
 ---
 

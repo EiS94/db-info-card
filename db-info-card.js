@@ -252,10 +252,17 @@ class DbInfoCard extends HTMLElement {
     const platformArr = seg["Arrival Platform"]
       ? `<span class="platform">Gl.&nbsp;${esc(seg["Arrival Platform"])}</span>` : "";
 
+    // Train destination as shown on the platform display (db_info >= PR 29).
+    // Skipped when it is the stop where you get off anyway.
+    const dir = String(seg["Departure Direction"] || "").trim();
+    const sameAsArrival = dir.toLowerCase() === String(seg.Arrival || "").trim().toLowerCase();
+    const direction = dir && !sameAsArrival
+      ? ` <span class="segment-direction">→&nbsp;${esc(dir)}</span>` : "";
+
     return `
       <tr class="segment-header-row">
         <td colspan="4" class="segment-name-cell">
-          ${this._icon(seg.Name)} <strong>${esc(seg.Name || "–")}</strong>${depBadge ? "&nbsp;" + depBadge : ""}
+          ${this._icon(seg.Name)} <strong>${esc(seg.Name || "–")}</strong>${direction}${depBadge ? "&nbsp;" + depBadge : ""}
         </td>
       </tr>
       <tr class="segment-stop-row">
@@ -477,6 +484,7 @@ class DbInfoCard extends HTMLElement {
           font-size: 0.9em;
         }
         .segment-name-cell { padding-top: 8px !important; }
+        .segment-direction { color: var(--secondary-text-color); font-size: 0.9em; }
 
         .segment-walk-cell {
           color: var(--secondary-text-color);

@@ -81,7 +81,9 @@ class DbInfoCard extends HTMLElement {
       throw new Error("Bitte 'entity_prefix' angeben, z.B. sensor.home_hbf_verbindung_");
     }
     // Optionale Spalten: show_start (default: true), show_problems (default: false), delay_threshold (default: 5), hide_city (default: "")
+    // skin: "default" (table) or "db" (layout modelled on bahn.de)
     this._config = {
+      skin: "default",
       show_start: true,
       show_problems: false,
       delay_threshold: 5,
@@ -306,10 +308,379 @@ class DbInfoCard extends HTMLElement {
     return departure;
   }
 
+  // ---------------------------------------------------------------------
+  // Skin "db": layout modelled on the connection list of bahn.de
+  // ---------------------------------------------------------------------
+
+  // Planned time, with the realtime value below it (green/red) if available
+  _dbTime(planned, real, canceled) {
+    const pt = this._formatTime(planned);
+    if (!pt) return `<span class="db-t db-muted">–</span>`;
+    if (canceled) return `<span class="db-t db-strike">${pt}</span>`;
+    const rt = this._formatTime(real);
+    if (!rt) return `<span class="db-t">${pt}</span>`;
+    const late = this._delayMinutes(planned, real) >= this._config.delay_threshold;
+    return `<span class="db-t">${pt}</span><span class="db-rt ${late ? "db-late" : "db-ontime"}">${rt}</span>`;
+  }
+
+  _segmentMinutes(seg) {
+    const dep = this._parseDate(seg["Departure Time Real"]) || this._parseDate(seg["Departure Time"]);
+    const arr = this._parseDate(seg["Arrival Time Real"]) || this._parseDate(seg["Arrival Time"]);
+    if (!dep || !arr) return null;
+    return Math.round((arr - dep) / 60000);
+  }
+
+  // Product class of a train name, used for the bahn.de colour coding.
+  // Unknown names get no class and keep the neutral grey.
+  _productClass(name) {
+    if (!name) return "";
+    if (/\b(ICE|ECE|TGV|RJX?|NJ|EN|FLX)\b|\b(ICE|ECE|TGV|RJX?|NJ|EN|FLX)\s*\d|Fernzug|Intercity-?Express/.test(name)) return "db-p-ice";
+    if (/\b(IC|EC)\b|\b(IC|EC)\s*\d|Intercity|Eurocity/.test(name)) return "db-p-ic";
+    if (/\bS\s*\d|S-Bahn/.test(name)) return "db-p-s";
+    if (/\bU\s*\d|U-Bahn/.test(name)) return "db-p-u";
+    if (/\b(STR|Tram)\b|Straßenbahn|Stadtbahn/i.test(name)) return "db-p-tram";
+    if (/\b(RE|RB|IRE|MEX)\s*\d|\b(RE|RB|IRE|MEX)\b|Regionalzug|Regionalexpress|Regionalbahn/.test(name)) return "db-p-regio";
+    if (/Fähre|Schiff|\bF\s*\d/.test(name)) return "db-p-ferry";
+    if (/\b(AST|Taxi|Rufbus|Ruftaxi)\b/i.test(name)) return "db-p-taxi";
+    if (/bus|\bSEV\b|^\s*\d+\s*$/i.test(name)) return "db-p-bus";
+    return "";
+  }
+
+  // Bar with one block per leg, width proportional to its duration
+  _dbProductBar(details) {
+    const parts = details.map(seg => {
+      if (seg.Name === "Fußweg") return `<span class="db-bar-walk" title="Fußweg">🚶</span>`;
+      const grow = Math.max(this._segmentMinutes(seg) || 1, 1);
+      return `<span class="db-bar-leg ${this._productClass(seg.Name)}" style="flex-grow:${grow}">${esc(seg.Name || "–")}</span>`;
+    });
+    return parts.length ? `<div class="db-bar">${parts.join("")}</div>` : "";
+  }
+
+  _dbPlatform(platform) {
+    return platform ? `<span class="db-platform">Gl.&nbsp;${esc(platform)}</span>` : "";
+  }
+
+  _dbTrainRows(seg) {
+    const dir = String(seg["Departure Direction"] || "").trim();
+    const sameAsArrival = dir.toLowerCase() === String(seg.Arrival || "").trim().toLowerCase();
+    const direction = dir && !sameAsArrival ? `<span class="db-direction">→&nbsp;${esc(dir)}</span>` : "";
+    const mins = this._segmentMinutes(seg);
+    const stop = (pos, name, planned, real, platform) => `
+      <div class="db-row db-stop db-stop-${pos}">
+        <div class="db-time">${this._dbTime(planned, real, false)}</div>
+        <div class="db-rail"></div>
+        <div class="db-station">${esc(name || "–")}</div>
+        <div class="db-plat">${this._dbPlatform(platform)}</div>
+      </div>`;
+    return `
+      ${stop("dep", seg.Departure, seg["Departure Time"], seg["Departure Time Real"], seg["Departure Platform"])}
+      <div class="db-row db-leg">
+        <div class="db-time">${mins > 0 ? `<span class="db-legdur">${mins}&nbsp;min</span>` : ""}</div>
+        <div class="db-rail"></div>
+        <div class="db-leginfo">
+          <span class="db-chip ${this._productClass(seg.Name)}">${esc(seg.Name || "–")}</span>${direction}
+        </div>
+        <div class="db-plat"></div>
+      </div>
+      ${stop("arr", seg.Arrival, seg["Arrival Time"], seg["Arrival Time Real"], seg["Arrival Platform"])}`;
+  }
+
+  _dbTransferRow(prev, next, walk) {
+    let mins = null;
+    if (prev && next) {
+      const arr = this._parseDate(prev["Arrival Time Real"]) || this._parseDate(prev["Arrival Time"]);
+      const dep = this._parseDate(next["Departure Time Real"]) || this._parseDate(next["Departure Time"]);
+      if (arr && dep && dep >= arr) mins = Math.round((dep - arr) / 60000);
+    }
+    const label = walk ? "🚶 Fußweg" : "Umstieg";
+    return `
+      <div class="db-row db-transfer">
+        <div class="db-time"></div>
+        <div class="db-rail"></div>
+        <div class="db-transfer-text">${label}${mins !== null ? ` · ${mins}&nbsp;min Umstiegszeit` : ""}</div>
+        <div class="db-plat"></div>
+      </div>`;
+  }
+
+  _dbTimeline(details) {
+    const out = [];
+    let prev = null;
+    let walk = false;
+    for (const seg of details) {
+      if (seg.Name === "Fußweg") { walk = true; continue; }
+      if (prev || walk) out.push(this._dbTransferRow(prev, seg, walk));
+      out.push(this._dbTrainRows(seg));
+      prev = seg;
+      walk = false;
+    }
+    if (walk) out.push(this._dbTransferRow(prev, null, true));
+    return out.join("");
+  }
+
+  _renderDbSkin(sensors) {
+    const title = this._config.title || "";
+
+    const rowsHtml = sensors.map(sensor => {
+      const attr = sensor.attributes;
+      const key = this._connectionKey(attr);
+      const isExpanded = this._expandedKey === key;
+      const details = this._parseDetails(attr.Details || []);
+      const problem = this._problem(attr.Problems);
+      const canceled = !!problem && problem.code === "CANCELED";
+      const firstTrain = details.find(seg => seg.Name !== "Fußweg");
+
+      const transfers = attr.Transfers !== undefined && attr.Transfers !== null
+        ? `${esc(attr.Transfers)}&nbsp;${Number(attr.Transfers) === 1 ? "Umstieg" : "Umstiege"}` : "";
+      const meta = [attr.Duration ? esc(attr.Duration) : "", transfers].filter(Boolean).join(`<span class="db-sep">|</span>`);
+
+      const start = this._config.show_start
+        ? `<span class="db-start">${esc(this._formatStart(attr.Departure))}</span>${this._dbPlatform(firstTrain && firstTrain["Departure Platform"])}`
+        : "";
+      // a cancellation is always shown, other warnings only with show_problems
+      const notice = problem && (canceled || this._config.show_problems)
+        ? `<div class="db-notice${canceled ? " db-notice-error" : ""}">${esc(problem.text)}</div>` : "";
+      const detailNotice = problem && !canceled && !this._config.show_problems
+        ? `<div class="db-notice db-notice-detail">${esc(problem.text)}</div>` : "";
+
+      return `
+        <div class="db-conn${canceled ? " db-canceled" : ""}">
+          <div class="main-row db-head" data-key="${esc(key)}">
+            <div class="db-head-top">
+              <div class="db-times">
+                <span class="db-tcol">${this._dbTime(attr["Departure Time"], attr["Departure Time Real"], canceled)}</span>
+                <span class="db-dash">–</span>
+                <span class="db-tcol">${this._dbTime(attr["Arrival Time"], attr["Arrival Time Real"], canceled)}</span>
+              </div>
+              <div class="db-meta">${meta}</div>
+            </div>
+            ${this._dbProductBar(details)}
+            ${notice}
+            <div class="db-head-bottom">
+              <div class="db-from">${start}</div>
+              <div class="db-more">Details <span class="expand-cell">${isExpanded ? "▴" : "▾"}</span></div>
+            </div>
+          </div>
+          <div class="db-detail">
+            <div class="detail-wrap${isExpanded ? " wrap-open" : ""}">
+              <div class="detail-inner">
+                <div class="db-timeline">
+                  ${detailNotice}
+                  ${this._dbTimeline(details)}
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>`;
+    }).join("");
+
+    const emptyHtml = sensors.length === 0
+      ? `<div class="db-empty">${this._emptyText()}</div>` : "";
+
+    this.shadowRoot.innerHTML = `
+      <style>
+        :host { display: block; }
+
+        .db {
+          --db-red: var(--db-info-red, #ec0016);
+          --db-ontime: var(--db-info-ontime-color, #408335);
+          --db-late: var(--db-info-late-color, #ec0016);
+          --db-text: var(--primary-text-color, #282d37);
+          --db-muted: var(--secondary-text-color, #646973);
+          --db-line: var(--divider-color, #d7dce1);
+          --db-fill: rgba(135, 140, 150, 0.22);
+          --db-card: var(--ha-card-background, var(--card-background-color, #fff));
+          color: var(--db-text);
+          padding: 0 16px 4px 16px;
+          line-height: 1.35;
+        }
+        .db-muted { color: var(--db-muted); }
+
+        .db-conn { border-top: 1px solid var(--db-line); }
+        .db-conn:first-child { border-top: none; }
+
+        .db-head { padding: 12px 0 10px 0; cursor: pointer; }
+
+        .db-head-top {
+          display: flex;
+          justify-content: space-between;
+          align-items: flex-start;
+          gap: 12px;
+        }
+        .db-times { display: flex; align-items: flex-start; gap: 6px; }
+        .db-tcol { display: flex; flex-direction: column; }
+        .db-t { font-weight: 700; font-variant-numeric: tabular-nums; }
+        .db-times .db-t, .db-dash { font-size: 1.25em; line-height: 1.2; }
+        .db-dash { color: var(--db-text); }
+        .db-rt { font-size: 0.85em; font-weight: 700; font-variant-numeric: tabular-nums; }
+        .db-ontime { color: var(--db-ontime); }
+        .db-late { color: var(--db-late); }
+        .db-strike { text-decoration: line-through; color: var(--db-muted); }
+
+        .db-meta {
+          color: var(--db-muted);
+          font-size: 0.9em;
+          white-space: nowrap;
+          padding-top: 0.25em;
+        }
+        .db-sep { margin: 0 0.5em; color: var(--db-line); }
+
+        /* Product bar */
+        .db-bar { display: flex; gap: 3px; margin-top: 10px; }
+        .db-bar-leg {
+          flex: 1 1 0;
+          min-width: max-content;
+          background: var(--db-fill);
+          border-radius: 4px;
+          padding: 3px 8px;
+          font-size: 0.8em;
+          font-weight: 700;
+          text-align: center;
+          white-space: nowrap;
+        }
+        .db-bar-walk {
+          flex: 0 0 auto;
+          padding: 3px 2px;
+          font-size: 0.8em;
+          border-bottom: 2px dotted var(--db-muted);
+        }
+        .db-canceled .db-bar-leg { text-decoration: line-through; opacity: 0.55; }
+
+        /* Product colours as on bahn.de. The faint outline keeps the dark
+           long-distance blocks visible on dark themes. */
+        .db [class*="db-p-"] {
+          background: var(--db-p);
+          color: #fff;
+          box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.16);
+        }
+        .db-p-ice   { --db-p: #282d37; }
+        .db-p-ic    { --db-p: #646973; }
+        .db-p-regio { --db-p: #878c96; }
+        .db-p-s     { --db-p: #408335; }
+        .db-p-u     { --db-p: #1455c0; }
+        .db-p-tram  { --db-p: #a9455d; }
+        .db-p-bus   { --db-p: #814997; }
+        .db-p-ferry { --db-p: #309fd1; }
+        .db .db-p-taxi { --db-p: #ffd800; color: #282d37; }
+
+        .db-notice {
+          margin-top: 8px;
+          font-size: 0.85em;
+          font-weight: 700;
+          color: var(--warning-color, #c75f00);
+        }
+        .db-notice::before { content: "⚠ "; }
+        .db-notice-error { color: var(--db-red); }
+        .db-notice-detail { margin: 0 0 10px 0; }
+
+        .db-head-bottom {
+          display: flex;
+          justify-content: space-between;
+          align-items: baseline;
+          gap: 12px;
+          margin-top: 8px;
+          font-size: 0.9em;
+        }
+        .db-from { color: var(--db-muted); min-width: 0; }
+        .db-start { margin-right: 8px; }
+        .db-more { color: var(--db-text); font-weight: 700; white-space: nowrap; }
+        .db-head:hover .db-more { color: var(--db-red); }
+        .expand-cell { font-size: 0.85em; }
+
+        .db-platform { white-space: nowrap; color: var(--db-muted); }
+
+        /* Detail expansion */
+        .detail-wrap {
+          display: grid;
+          grid-template-rows: 0fr;
+          transition: grid-template-rows 0.25s ease;
+        }
+        .detail-wrap.wrap-open { grid-template-rows: 1fr; }
+        .detail-inner { overflow: hidden; }
+
+        /* Timeline */
+        .db-timeline { padding: 4px 0 14px 0; font-size: 0.92em; }
+        .db-row {
+          display: grid;
+          grid-template-columns: 3.3em 22px minmax(0, 1fr) auto;
+          column-gap: 8px;
+        }
+        .db-time { display: flex; flex-direction: column; align-items: flex-end; }
+        .db-station { font-weight: 700; }
+        .db-plat { text-align: right; }
+
+        .db-rail { position: relative; }
+        .db-rail::before {
+          content: "";
+          position: absolute;
+          left: 50%;
+          top: 0;
+          bottom: 0;
+          width: 4px;
+          margin-left: -2px;
+          background: var(--db-text);
+        }
+        .db-stop .db-rail::after {
+          content: "";
+          position: absolute;
+          left: 50%;
+          top: 0.675em;
+          width: 8px;
+          height: 8px;
+          margin: -7px 0 0 -7px;
+          border: 3px solid var(--db-text);
+          border-radius: 50%;
+          background: var(--db-card);
+        }
+        .db-stop-dep .db-rail::before { top: 0.675em; }
+        .db-stop-arr .db-rail::before { bottom: auto; height: 0.675em; }
+
+        .db-leg { min-height: 2.6em; }
+        .db-leginfo { align-self: center; padding: 8px 0; }
+        .db-legdur { align-self: flex-end; margin: auto 0; color: var(--db-muted); font-size: 0.85em; }
+        .db-chip {
+          display: inline-block;
+          background: var(--db-fill);
+          border-radius: 4px;
+          padding: 1px 8px;
+          font-size: 0.88em;
+          font-weight: 700;
+          margin-right: 6px;
+          white-space: nowrap;
+        }
+        .db-direction { color: var(--db-muted); }
+
+        .db-transfer .db-rail::before {
+          width: 0;
+          margin-left: -2px;
+          background: none;
+          border-left: 4px dotted var(--db-muted);
+        }
+        .db-transfer-text { color: var(--db-muted); font-size: 0.9em; padding: 10px 0; }
+
+        .db-empty { padding: 16px 0; text-align: center; color: var(--db-muted); }
+      </style>
+
+      <ha-card${title ? ` header="${esc(title)}"` : ""}>
+        <div class="db">
+          ${emptyHtml}
+          ${rowsHtml}
+        </div>
+      </ha-card>
+    `;
+  }
+
+  _emptyText() {
+    return this._prefixFound
+      ? "Aktuell keine Verbindungen verfügbar."
+      : `Keine Sensoren gefunden für Prefix: <code>${esc(this._config.entity_prefix)}</code>`;
+  }
+
   _render() {
     if (!this._hass || !this._config) return;
 
     const sensors = this._getSensors();
+    if (this._config.skin === "db") return this._renderDbSkin(sensors);
+
     const title = this._config.title || "";
     const showStart = this._config.show_start;
     const threshold = this._config.delay_threshold;
@@ -370,9 +741,7 @@ class DbInfoCard extends HTMLElement {
         </tr>`;
     }).join("");
 
-    const emptyText = this._prefixFound
-      ? "Aktuell keine Verbindungen verfügbar."
-      : `Keine Sensoren gefunden für Prefix: <code>${esc(this._config.entity_prefix)}</code>`;
+    const emptyText = this._emptyText();
     const emptyHtml = sensors.length === 0
       ? `<tr><td colspan="5" style="padding:16px;text-align:center;color:var(--secondary-text-color)">
            ${emptyText}
@@ -546,6 +915,8 @@ class DbInfoCard extends HTMLElement {
   // 1 unit = ~50px: header + table head + one row per connection
   getCardSize() {
     const rows = parseInt(this._config?.max_connections) || 5;
+    // the db skin has no table head, but each connection is about twice as tall
+    if (this._config?.skin === "db") return (this._config?.title ? 1 : 0) + rows * 2;
     return (this._config?.title ? 1 : 0) + 1 + rows;
   }
 
@@ -660,6 +1031,14 @@ class DbInfoCardEditor extends HTMLElement {
         </label>
 
         <label>
+          Design
+          <select id="skin">
+            <option value="default" ${this._config.skin !== "db" ? "selected" : ""}>Standard (Tabelle)</option>
+            <option value="db" ${this._config.skin === "db" ? "selected" : ""}>Deutsche Bahn (wie bahn.de)</option>
+          </select>
+        </label>
+
+        <label>
           Verspätungsschwellwert (Minuten, ab dem Rot angezeigt wird)
           <input type="number" id="threshold" value="${threshold}" min="1" max="60">
         </label>
@@ -678,7 +1057,7 @@ class DbInfoCardEditor extends HTMLElement {
         <div class="row">
           <label>
             <input type="checkbox" id="show_start" ${showStart ? "checked" : ""}>
-            Startspalte anzeigen
+            Start anzeigen
           </label>
         </div>
 
@@ -698,6 +1077,11 @@ class DbInfoCardEditor extends HTMLElement {
 
     this.shadowRoot.getElementById("title").addEventListener("change", (e) => {
       this._config = { ...this._config, title: e.target.value };
+      this._fireChange();
+    });
+
+    this.shadowRoot.getElementById("skin").addEventListener("change", (e) => {
+      this._config = { ...this._config, skin: e.target.value };
       this._fireChange();
     });
 
@@ -741,6 +1125,8 @@ class DbInfoCardEditor extends HTMLElement {
     if (document.activeElement !== threshold) threshold.value = this._config.delay_threshold ?? 5;
     if (document.activeElement !== maxConn) maxConn.value = this._config.max_connections ?? 5;
     if (hideCity && document.activeElement !== hideCity) hideCity.value = this._hideCityText();
+    const skin = this.shadowRoot.getElementById("skin");
+    if (skin && document.activeElement !== skin) skin.value = this._config.skin === "db" ? "db" : "default";
     showStart.checked = this._config.show_start !== false;
     this.shadowRoot.getElementById("show_problems").checked = this._config.show_problems === true;
   }

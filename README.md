@@ -66,6 +66,7 @@ The connection dropdown automatically detects all DB Info sensors and groups the
 type: custom:db-info-card
 entity_prefix: sensor.home_hbf_verbindung_
 title: Zuhause → Würzburg Hbf      # optional
+skin: default                      # optional, default or db
 show_start: true                   # optional, default: true
 show_problems: false               # optional, default: false
 delay_threshold: 5                 # optional, default: 5
@@ -79,11 +80,25 @@ hide_city: Würzburg, Randersacker   # optional, comma-separated
 |-------------------|-----------|--------------|------------------------------------------------------------------------------------------------------------|
 | `entity_prefix`   | `string`  | **required** | Prefix of the DB Info sensors, e.g. `sensor.home_hbf_verbindung_`                                         |
 | `title`           | `string`  | _(none)_     | Card title shown in the header                                                                             |
-| `show_start`      | `boolean` | `true`       | Show or hide the "Start" column                                                                            |
+| `skin`            | `string`  | `default`    | Look of the card: `default` (table) or `db` (layout modelled on the connection list of bahn.de, see [Skins](#-skins)) |
+| `show_start`      | `boolean` | `true`       | Show or hide the "Start" column (in the `db` skin: the start stop and platform below the times)            |
 | `show_problems`   | `boolean` | `false`      | Show warnings like "Anschluss gefährdet" directly below the connection name. They are always shown in the expanded details |
 | `delay_threshold` | `number`  | `5`          | Minutes of delay from which the time is shown in red                                                       |
 | `max_connections` | `number`  | `5`          | Number of connections to display (1–5). The integration always fetches 5; this limits how many are shown   |
 | `hide_city`       | `string`  | _(none)_     | Hides city names in the start column, e.g. `Letzter Hieb, Würzburg` → `Letzter Hieb`, `Darmstadt-Wixhausen` → `Wixhausen`. Multiple cities can be given comma-separated (`Stuttgart, S-Feuerbach`) or as a YAML list |
+
+---
+
+## 🎨 Skins
+
+- **`default`:** Compact table with one row per connection.
+- **`db`:** Modelled on the connection list of bahn.de. Each connection shows departure and arrival time with the
+  real-time value below, duration and transfers, and a bar with one block per train. The expanded details are a
+  timeline with stops, platforms, train direction and transfer times. Trains are colour-coded by type as on bahn.de
+  (e.g. long-distance dark, regional grey, S-Bahn green, U-Bahn blue, tram burgundy, bus purple).
+
+The `db` skin follows your Home Assistant theme (light/dark). Its accent colours can be overridden in a theme with
+`db-info-red`, `db-info-ontime-color` and `db-info-late-color`.
 
 ---
 

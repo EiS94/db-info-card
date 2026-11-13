@@ -243,6 +243,13 @@ class DbInfoCard extends HTMLElement {
     return d ? d.getTime() : null;
   }
 
+  // Realtime messages of a leg (db_info sends them as "Notes" in the details)
+  _notes(seg) {
+    return Array.isArray(seg.Notes)
+      ? seg.Notes.filter(n => typeof n === "string" && n.trim())
+      : [];
+  }
+
   _renderSegment(seg) {
     if (seg.Name === "Fußweg") {
       return `
@@ -286,7 +293,12 @@ class DbInfoCard extends HTMLElement {
         <td class="stop-name">${esc(seg.Arrival || "–")}</td>
         <td class="stop-time">${this._renderTimeCell(seg["Arrival Time"], seg["Arrival Time Real"], this._config.delay_threshold)}</td>
         <td class="stop-platform">${platformArr}</td>
-      </tr>`;
+      </tr>
+      ${this._notes(seg).map(note => `
+      <tr class="segment-note-row">
+        <td></td>
+        <td colspan="3" class="segment-note">${esc(note)}</td>
+      </tr>`).join("")}`;
   }
 
   // hide_city accepts a comma-separated string ("Stuttgart, S-Feuerbach") or a YAML list
@@ -391,6 +403,7 @@ class DbInfoCard extends HTMLElement {
         <div class="db-rail"></div>
         <div class="db-leginfo">
           <span class="db-chip ${this._productClass(seg.Name)}">${esc(seg.Name || "–")}</span>${direction}
+          ${this._notes(seg).map(note => `<div class="db-note">${esc(note)}</div>`).join("")}
         </div>
         <div class="db-plat"></div>
       </div>
@@ -705,6 +718,11 @@ class DbInfoCard extends HTMLElement {
           white-space: nowrap;
         }
         .db-direction { color: var(--db-muted); }
+        .db-note {
+          margin-top: 4px;
+          font-size: 0.88em;
+          color: var(--warning-color, #c75f00);
+        }
 
         .db-transfer .db-rail::before {
           width: 0;
@@ -970,8 +988,14 @@ class DbInfoCard extends HTMLElement {
         }
 
         /* Segments */
+        .segment-note-row td.segment-note {
+          color: var(--dbi-warn);
+          font-size: 0.8em;
+          padding-top: 0;
+        }
         .segment-header-row td,
         .segment-stop-row td,
+        .segment-note-row td,
         .segment-walk-row td {
           padding: 2px 0.5em;
           color: var(--primary-text-color);

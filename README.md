@@ -140,6 +140,8 @@ Clicking a connection expands it to show:
   list in the `default` skin and as a timeline with travel and transfer times in the `db` skins. If the train continues
   beyond your stop, its final destination is shown next to the train name (e.g. `RE 9 → Frankfurt Hbf`), matching the
   platform display. Requires a DB Info version that provides `Departure Direction`
+- **Notes:** Realtime messages from Deutsche Bahn for a leg (e.g. `Verspätung aus vorheriger Fahrt`) are shown below
+  it in the expanded details, in all skins. Requires DB Info 5.3.0 or newer; with older versions nothing is shown
 
 ---
 

@@ -13,7 +13,7 @@ journey.
 
 > **Requires the [DB Info Integration](https://github.com/EiS94/db_info)**
 
-![DB Info Card with the db-compact skin in light and dark mode](images/skin-db-compact.gif)
+![DB Info Card with the db-compact skin](images/skin-db-compact.gif)
 
 ---
 
@@ -23,7 +23,7 @@ journey.
 - Three [skins](#-skins): a compact table, a layout modelled on bahn.de and a one-line variant of it
 - Real-time delays, cancellations and warnings such as "Anschluss gefährdet"
 - Click a connection to expand its details (stops, platforms, train direction, per-segment delays, transfers)
-- Follows your Home Assistant theme in light and dark mode
+- Light and dark mode, switching automatically with your Home Assistant theme
 - Visual card editor in the Home Assistant style (no YAML required)
 
 ---
@@ -97,13 +97,14 @@ hide_city: Würzburg, Randersacker   # optional, comma-separated
 ## 🎨 Skins
 
 The card comes with three skins, selected with the `skin` option or the design dropdown of the visual editor. The
-images show the same five connections in each skin, in light and dark mode, while a connection is expanded.
+images show the same five connections in each skin in light mode; every skin also has a dark mode (see
+[Theming](#theming)).
 
 ### `default`
 
 Compact table with one row per connection. Expanding a row shows a summary and every leg of the journey.
 
-![default skin in light and dark mode](images/skin-default.gif)
+![default skin](images/skin-default.gif)
 
 ### `db`
 
@@ -112,7 +113,7 @@ below, duration and transfers, and a bar with one block per train. The expanded 
 platforms, train direction and transfer times. Trains are colour-coded by type as on bahn.de (e.g. long-distance dark,
 regional grey, S-Bahn green, U-Bahn blue, tram burgundy, bus purple).
 
-![db skin in light and dark mode](images/skin-db.gif)
+![db skin](images/skin-db.gif)
 
 ### `db-compact`
 
@@ -120,12 +121,13 @@ The `db` look in the footprint of the table. Collapsed, each connection is a sin
 colour-coded train bar and the duration, so the card is as tall as with the `default` skin. Expanding a connection
 shows the same timeline as the `db` skin.
 
-![db-compact skin in light and dark mode](images/skin-db-compact.gif)
+![db-compact skin](images/skin-db-compact.gif)
 
 ### Theming
 
-All skins follow your Home Assistant theme (light/dark). The `default` skin uses brighter status colours in dark mode
-so that times stay readable. The colours can be overridden in a theme with `db-info-ontime-color` and
+Every skin has a light and a dark mode and follows your Home Assistant theme automatically — no option needed. If your
+profile's theme mode is set to *Auto*, the card switches together with your device's system setting. The `default` skin
+uses brighter status colours in dark mode so that times stay readable. The colours can be overridden in a theme with `db-info-ontime-color` and
 `db-info-late-color` (all skins), `db-info-red` (`db` skins) and `db-info-row-alternative-color` (zebra stripe of the
 `default` skin).
 
